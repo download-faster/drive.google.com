@@ -1,44 +1,40 @@
-# Traffmonetizer — Cài đặt tự động 1 lệnh (Linux / macOS / Windows)
+# tm-install — cài Traffmonetizer 1 lệnh
 
-Script tự động: cài Docker (nếu chưa có) → chạy container `tm` (traffmonetizer/cli_v2) → tự động cập nhật bằng watchtower.
-Toàn bộ cài đặt chạy ngầm, không hiện cửa sổ/log — chỉ hiện chỗ nhập email và "Hello".
+Tự động cài Docker **trong WSL** (không dùng Docker Desktop) và chạy container Traffmonetizer. Chạy ngầm hoàn toàn, màn hình chỉ hiện chỗ nhập email + `Hello`.
 
-## Lưu ý trước khi cài
-- **TẮT VPN / Cloudflare WARP / proxy** trên máy. Traffmonetizer **chỉ chấp nhận IP nhà mạng dân dụng** — nếu bật VPN, container sẽ bị ngắt kết nối liên tục (`connecting → disconnected`).
-- Máy cần kết nối Internet ổn định.
-- Docker mới cài trên Windows/macOS lần đầu có thể cần khởi động lại máy rồi chạy lại script.
+## Cách dùng
 
-## 🐧 Linux
-Mở Terminal, chạy (nhập mật khẩu sudo khi được hỏi):
-```bash
-curl -fsSL https://raw.githubusercontent.com/khoahocdrive/tm-install/main/install_linux.sh | sudo bash
+### Windows (PowerShell hoặc CMD)
 ```
-
-## 🍎 macOS
-Mở Terminal, chạy (khi được hỏi nhập email chỉ cần nhập rồi Enter):
-```bash
-curl -fsSL https://raw.githubusercontent.com/khoahocdrive/tm-install/main/install_macos.sh | bash
-```
-
-## 🪟 Windows
-Mở **PowerShell**, chạy 1 lệnh:
-```powershell
-irm https://raw.githubusercontent.com/khoahocdrive/tm-install/main/install_windows.ps1 | iex
-```
-
-Nếu đang trong **CMD**, chạy lệnh này thay thế:
-```cmd
 powershell -c "irm https://raw.githubusercontent.com/khoahocdrive/tm-install/main/install_windows.ps1 | iex"
 ```
 
-## Kiểm tra đã chạy thành công
-```bash
-docker logs -f tm        # phải thấy: connected (và giữ nguyên)
+### Linux
 ```
-- Log cài đặt: Linux `/var/log/tm_install.log` — macOS `~/.tm/install.log` — Windows `C:\ProgramData\tm\install.log`
-- Xem thiết bị và thu nhập: dashboard traffmonetizer.com
+curl -fsSL https://raw.githubusercontent.com/khoahocdrive/tm-install/main/install_linux.sh | sudo bash
+```
 
-## Gỡ
-```bash
-docker rm -f tm watchtower
+### macOS
 ```
+curl -fsSL https://raw.githubusercontent.com/khoahocdrive/tm-install/main/install_macos.sh | bash
+```
+
+## Windows: kiến trúc mới (gọn và ẩn)
+
+- KHÔNG cài Docker Desktop (tiết kiệm ~595MB download + ~2GB ổ đĩa + ~800MB RAM)
+- Dùng Docker Engine bên trong một distro WSL import thủ công (`tm-linux`, Alpine) — distro import **không xuất hiện** trong Start Menu, danh sách app hay recent apps
+- WSL bị giới hạn 1GB RAM / 2 CPU / 0 swap qua `.wslconfig`
+- Task `TraffmonetizerResume` chạy ẩn lúc đăng nhập để tự khởi động Docker + container
+- watchtower mặc định TẮT (bật lại: đặt biến môi trường `TM_WATCHTOWER=true` trước khi chạy)
+
+## Kiểm tra sau khi cài (Windows)
+
+```
+wsl -d tm-linux -u root -- docker logs tm
+notepad C:\ProgramData\tm\install.log
+```
+
+## Lưu ý
+
+- Traffmonetizer chỉ chấp nhận IP nhà dân dụng — **tắt VPN/WARP** trước khi chạy, không thì container sẽ connecting → disconnected lặp vô hạn.
+- Sau khi cài xong, nên tạo file `.wslconfig` (script tự tạo nếu chưa có) để giữ máy nhẹ.
