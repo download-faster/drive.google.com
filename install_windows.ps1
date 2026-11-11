@@ -67,6 +67,16 @@ function Start-DockerDaemon {
   return $false
 }
 
+function Hide-LinuxExplorerIcon {
+  try {
+    $k = 'HKCU:\Software\Classes\CLSID\{B2B4A4D1-2754-4140-A2EB-9A76D9D7CDC6}'
+    if (-not (Test-Path $k)) { New-Item -Path $k -Force | Out-Null }
+    Set-ItemProperty -Path $k -Name 'System.IsPinnedToNameSpaceTree' -Value 0 -Type DWord
+    Log 'Da an icon Linux trong File Explorer'
+  } catch {}
+}
+Hide-LinuxExplorerIcon
+
 # Gioi han RAM cua WSL de he thong luon nhe (khong ghi de neu user da co file nay)
 try {
   $wslcfg = Join-Path $env:UserProfile '.wslconfig'
@@ -170,7 +180,8 @@ if (DockerUp) {
   }
   Set-ResumeTask
   Log '=== Hoan tat ==='
-} else {
+}
+else {
   Set-ResumeTask
   Log 'dockerd chua san sang - da dang ky task resume, se tu chay lai khi dang nhap'
   exit 2
