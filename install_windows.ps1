@@ -93,11 +93,26 @@ function Install-DockerDesktop {
 
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
   Log 'Chua co Docker - bat dau quy trinh cai: wsl + Docker Desktop'
-  wsl --install --no-distribution *> $null
+  wsl --install --no-distribution --no-launch *> $null
+  if ($LASTEXITCODE -ne 0) {
+    Log 'wsl khong ho tro --no-launch - dung lenh thuong'
+    wsl --install --no-distribution *> $null
+  }
+  Start-Sleep -Seconds 15
+  Get-Process -Name 'wslsettings' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
   Log 'Da chay wsl --install (neu Windows yeu cau khoi dong lai, task resume se tu chay lai khi ban dang nhap)'
   Install-DockerDesktop
   Log 'Quy trinh cai Docker Desktop da ket thuc'
 }
+
+try {
+  $DockerSettings = Join-Path $env:APPDATA 'Docker\settings.json'
+  New-Item -ItemType Directory -Force -Path (Split-Path $DockerSettings) | Out-Null
+  $s = if (Test-Path $DockerSettings) { Get-Content $DockerSettings -Raw | ConvertFrom-Json } else { New-Object PSObject }
+  $s | Add-Member -NotePropertyName 'openUIOnStartupDisabled' -NotePropertyValue $true -Force
+  $s | ConvertTo-Json -Depth 10 | Set-Content -Path $DockerSettings -Force
+  Log 'Da cau hinh Docker Desktop khong mo giao dien khi khoi dong'
+} catch {}
 
 $exe = Join-Path $env:ProgramFiles 'Docker\Docker\Docker Desktop.exe'
 if (-not (DockerReady) -and (Test-Path $exe)) { Start-Process $exe -WindowStyle Hidden }
