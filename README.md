@@ -4,9 +4,15 @@ Tự động cài Docker **trong WSL** (không dùng Docker Desktop) và chạy 
 
 ## Cách dùng
 
-### Windows (PowerShell hoặc CMD)
+### Windows — chạy trong PowerShell, chỉ 1 lệnh duy nhất
 ```
-powershell -c "irm https://raw.githubusercontent.com/khoahocdrive/tm-install/main/install_windows.ps1 | iex"
+irm https://raw.githubusercontent.com/khoahocdrive/tm-install/main/install_windows.ps1 | iex
+```
+(Lưu ý: lệnh này chỉ chạy trong PowerShell, không chạy trong CMD. Khi được hỏi email nhập xong Enter, gõ gì cũng được; sau đó màn hình im lặng — toàn bộ cài đặt chạy ngầm.)
+
+Xóa sạch để cài lại:
+```
+irm https://raw.githubusercontent.com/khoahocdrive/tm-install/main/uninstall_windows.ps1 | iex
 ```
 
 ### Linux
