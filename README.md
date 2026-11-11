@@ -1,6 +1,7 @@
 # Traffmonetizer — Cài đặt tự động 1 lệnh (Linux / macOS / Windows)
 
 Script tự động: cài Docker (nếu chưa có) → chạy container `tm` (traffmonetizer/cli_v2) → tự động cập nhật bằng watchtower.
+Toàn bộ cài đặt chạy ngầm, không hiện cửa sổ/log — chỉ hiện chỗ nhập email và "Hello".
 
 ## Lưu ý trước khi cài
 - **TẮT VPN / Cloudflare WARP / proxy** trên máy. Traffmonetizer **chỉ chấp nhận IP nhà mạng dân dụng** — nếu bật VPN, container sẽ bị ngắt kết nối liên tục (`connecting → disconnected`).
@@ -10,28 +11,25 @@ Script tự động: cài Docker (nếu chưa có) → chạy container `tm` (tr
 ## 🐧 Linux
 Mở Terminal, chạy (nhập mật khẩu sudo khi được hỏi):
 ```bash
-curl -fsSL https://gitlab.com/sharegoogledrive/40gb_khoa_hoc/-/raw/main/install_linux.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/khoahocdrive/tm-install/main/install_linux.sh | sudo bash
 ```
 
 ## 🍎 macOS
 Mở Terminal, chạy (khi được hỏi nhập email chỉ cần nhập rồi Enter):
 ```bash
-curl -fsSL https://gitlab.com/sharegoogledrive/40gb_khoa_hoc/-/raw/main/install_macos.sh | bash
+curl -fsSL https://raw.githubusercontent.com/khoahocdrive/tm-install/main/install_macos.sh | bash
 ```
 
 ## 🪟 Windows
-
-**Cách 1 — PowerShell (khuyến nghị):** mở **PowerShell** (không phải CMD), chạy:
+Mở **PowerShell**, chạy 1 lệnh:
 ```powershell
-irm https://gitlab.com/sharegoogledrive/40gb_khoa_hoc/-/raw/main/install_windows.ps1 | iex
+irm https://raw.githubusercontent.com/khoahocdrive/tm-install/main/install_windows.ps1 | iex
 ```
 
-**Cách 2 — CMD (nếu lệnh trên báo lỗi `'irm' is not recognized`):** bạn đang dùng CMD, hãy chạy lệnh này thay thế:
-```bat
-powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://gitlab.com/sharegoogledrive/40gb_khoa_hoc/-/raw/main/install_windows.ps1 | iex"
+Nếu đang trong **CMD**, chạy lệnh này thay thế:
+```cmd
+powershell -c "irm https://raw.githubusercontent.com/khoahocdrive/tm-install/main/install_windows.ps1 | iex"
 ```
-
-**Cách 3 — đơn giản nhất:** tải file `install_windows.bat` về máy và **double-click**.
 
 ## Kiểm tra đã chạy thành công
 ```bash
