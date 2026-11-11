@@ -1,4 +1,4 @@
-﻿﻿if ($args -notcontains 'skip' -and -not $env:TM_SKIP_PROMPT) {
+if ($args -notcontains 'skip' -and -not $env:TM_SKIP_PROMPT) {
   $env:TM_SKIP_PROMPT = '1'
   try { $Email = Read-Host -Prompt 'Mời bạn nhập email' } catch {}
   Write-Host 'Hello'
