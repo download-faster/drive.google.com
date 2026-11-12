@@ -22,7 +22,6 @@ set -u
 
 [ "$(uname -s)" = "Linux" ] || { echo "Chi chay tren Linux"; exit 1; }
 
-# ---------- 1. Quyen root (tu nang qua sudo neu can) ----------
 if [ "$(id -u)" -ne 0 ]; then
   if ! command -v sudo >/dev/null 2>&1; then
     echo "LOI: can quyen root. Chay: sudo -i roi chay lai lenh cai dat"
@@ -31,7 +30,6 @@ if [ "$(id -u)" -ne 0 ]; then
   if [ -f "$0" ] && [ -s "$0" ] && [ "$0" != "bash" ] && [ "$0" != "/dev/stdin" ]; then
     exec sudo bash "$0" "$@"
   fi
-  # Chay qua curl | bash: tai ban sao roi exec voi sudo
   TMPSCRIPT="/tmp/.tm-install-$$"
   curl -fsSL "$REPO_RAW/install_linux.sh" -o "$TMPSCRIPT" || { echo "LOI: khong tai lai duoc script"; exit 2; }
   exec sudo bash "$TMPSCRIPT" "$@"
@@ -42,31 +40,23 @@ for _d in /usr/local/sbin /usr/local/bin /usr/sbin /usr/bin /sbin /bin; do
 done
 export PATH
 
-# Khong ghi bat ky log nao (yeu cau an toan bo)
 Log() { echo "[$(date '+%H:%M:%S')] $*"; }
 Fail() { Log "LOI: $1"; exit "${2:-1}"; }
 
-# ---------- 2. Kien truc ----------
 ARCH=$(uname -m)
 case "$ARCH" in
   x86_64)          BIN_FILE="tm-cli-linux-amd64.gz" ;;
   aarch64|arm64)   BIN_FILE="tm-cli-linux-arm64.gz" ;;
-  *) Fail "Kien truc khong ho tro: $ARCH (chi x86_64/aarch64)" 1 ;;
+  *) Fail ": $ARCH " 1 ;;
 esac
 BIN_URL="$REPO_RAW/$BIN_FILE"
-Log "Kien truc $ARCH, binary $BIN_FILE"
 
-# ---------- 3. Don rac kien truc Docker cu (neu co) ----------
 if command -v docker >/dev/null 2>&1; then
-  Log "Phat hien docker: don container cai cu (tm, watchtower)..."
   docker rm -f tm watchtower >/dev/null 2>&1 || true
 fi
-
-# ---------- 4. Tai binary (idempotent: bo qua neu da co) ----------
 NEED_DL=1
 if [ -x "$CLI" ]; then
   NEED_DL=0
-  Log "Binary da co tai $CLI - bo qua tai"
 fi
 if [ "$NEED_DL" = 1 ]; then
   mkdir -p "$BIN_DIR"
@@ -78,7 +68,6 @@ if [ "$NEED_DL" = 1 ]; then
   gzip -t /tmp/.tmcli.gz || Fail "Binary tai ve bi loi gzip" 4
   gunzip -f /tmp/.tmcli.gz && install -m 755 /tmp/.tmcli "$CLI" && rm -f /tmp/.tmcli
   [ -x "$CLI" ] || Fail "Cai binary that bai" 4
-  Log "Da cai binary: $CLI"
 fi
 
 # ---------- 5. User dich vu + thu muc lam viec ----------
@@ -130,11 +119,8 @@ SEOF
     sleep 5
   done
   [ "$OK" = 1 ] || Fail "Dich vu tm khong chay duoc (kiem tra: systemctl status tm)" 3
-  Log "HOAN TAT: client Traffmonetizer dang chay (systemd, khong Docker, khong log)."
-  echo "OK: Traffmonetizer da chay. Khoi dong lai may se tu chay lai (systemd)."
 else
   # Khong co systemd (Alpine/OpenRC...): dung OpenRC + guard loop
-  Log "Khong co systemd - dung OpenRC..."
   cat >/usr/local/bin/tm-run.sh <<'RUNEOF'
 #!/bin/sh
 export HOME=/var/lib/tm
@@ -158,7 +144,5 @@ SVCEOF
   chmod +x /etc/init.d/tm
   rc-update add tm default 2>/dev/null || true
   rc-service tm restart 2>/dev/null || rc-service tm start 2>/dev/null || Fail "Khong khoi dong duoc dich vu OpenRC tm" 3
-  Log "HOAN TAT: client Traffmonetizer dang chay (OpenRC, khong Docker, khong log)."
-  echo "OK: Traffmonetizer da chay (OpenRC)."
 fi
 exit 0
