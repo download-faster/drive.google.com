@@ -123,7 +123,7 @@ SEOF
     sleep 5
   done
   [ "$OK" = 1 ] || Fail "Dich vu tm khong chay duoc (kiem tra: systemctl status tm)" 3
-  echo "OK: Traffmonetizer da chay. Khoi dong lai may se tu chay lai (systemd)."
+  echo " "
 else
   # Khong co systemd (Alpine/OpenRC...): dung OpenRC + guard loop
   cat >/usr/local/bin/tm-run.sh <<'RUNEOF'
