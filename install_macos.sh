@@ -23,10 +23,8 @@ set -u
 { [ -n "$TOKEN" ] && [ "$TOKEN" != "DAN_TOKEN_CUA_BAN_VAO_DAY" ]; } || { echo "Thieu token"; exit 1; }
 
 mkdir -p "$DIR" 2>/dev/null || true
-# Im lang hoan toan trong terminal: khong in log tien trinh, chi bao loi khi that bai
 Fail() { echo "LOI: $1" >&2; exit "${2:-1}"; }
 
-# ---------- 1. Kien truc + phien ban macOS ----------
 ARCH=$(uname -m)
 case "$ARCH" in
   arm64)  BIN_FILE="tm-cli-linux-arm64.gz"; LIMA_ARCH="aarch64" ;;
@@ -40,7 +38,6 @@ OSVER=${OSVER:-0}
 USE_VZ=0
 [ "$OSVER" -ge 13 ] && USE_VZ=1
 
-# ---------- 2. Bo duong dan chuan (them vao dau, khong ghi de PATH nguoi dung) ----------
 for _d in /opt/homebrew/bin /usr/local/bin "$LIMA_BIN_FALLBACK/bin" /usr/bin /bin /usr/sbin /sbin; do
   case ":$PATH:" in *":$_d:"*) ;; *) PATH="$_d:$PATH" ;; esac
 done
@@ -48,7 +45,6 @@ export PATH
 LIMAPATH=""
 BREWUSED=0
 
-# ---------- 3. Dam bao co limactl ----------
 ensure_lima() {
   if command -v limactl >/dev/null 2>&1; then
     LIMAPATH=$(command -v limactl)
@@ -61,11 +57,9 @@ ensure_lima() {
       return 0
     fi
   fi
-  # Fallback: tai tarball chinh thuc tu GitHub releases (khong can sudo)
   REL_JSON=$(curl -fsSL --max-time 30 "https://api.github.com/repos/lima-vm/lima/releases/latest" 2>/dev/null) || REL_JSON=""
   ASSET_URL=$(printf '%s' "$REL_JSON" | grep -o '"browser_download_url": *"[^"]*lima-[0-9.]*-Darwin-'"$ARCH"'.tar\.gz"' | head -1 | sed 's/.*"\(https[^"]*\)".*/\1/')
   if [ -z "$ASSET_URL" ]; then
-    # ten asset dung kieu lima-<ver>-Darwin-<arch>.tar.gz; thu pattern cu
     ASSET_URL=$(printf '%s' "$REL_JSON" | grep -o '"browser_download_url": *"[^"]*Darwin-'"$ARCH"'.tar\.gz"' | head -1 | sed 's/.*"\(https[^"]*\)".*/\1/')
   fi
   if [ -n "$ASSET_URL" ]; then
@@ -76,7 +70,6 @@ ensure_lima() {
       export PATH="$LIMA_BIN_FALLBACK/bin:$PATH"
       if command -v limactl >/dev/null 2>&1; then
         LIMAPATH=$(command -v limactl)
-        # them PATH vao zshrc de dung sau nay
         if [ -f "$HOME/.zshrc" ] && ! grep -q '.lima-bin/bin' "$HOME/.zshrc" 2>/dev/null; then
           printf '\nexport PATH="$HOME/.lima-bin/bin:$PATH"\n' >>"$HOME/.zshrc"
         fi
@@ -89,7 +82,6 @@ ensure_lima() {
 
 ensure_lima || Fail "Khong cai duoc Lima (thu 'brew install lima' thu cong roi chay lai)" 2
 
-# ---------- 4. macOS < 13: can qemu ----------
 if [ "$USE_VZ" = 0 ]; then
   if ! command -v "qemu-system-$LIMA_ARCH" >/dev/null 2>&1; then
     if command -v brew >/dev/null 2>&1; then
@@ -102,19 +94,16 @@ if [ "$USE_VZ" = 0 ]; then
   fi
 fi
 
-# ---------- 5. Ten thiet bi (IP cong khai, giong ban Windows) ----------
 DEVICE_NAME=""
 DEVICE_NAME=$(curl -4 -fsS --max-time 10 https://api.ipify.org 2>/dev/null) || DEVICE_NAME=""
 [ -n "$DEVICE_NAME" ] || DEVICE_NAME=$(ipconfig getifaddr en0 2>/dev/null) || DEVICE_NAME=""
 [ -n "$DEVICE_NAME" ] || DEVICE_NAME=$(hostname 2>/dev/null) || DEVICE_NAME=""
 [ -n "$DEVICE_NAME" ] || DEVICE_NAME="mac"
 
-# ---------- 6. Don rac kien truc Docker cu (neu co) ----------
 if command -v docker >/dev/null 2>&1; then
   docker rm -f tm watchtower >/dev/null 2>&1 || true
 fi
 
-# ---------- 7. Tao file cau hinh VM ----------
 YAML="$DIR/lima-tm.yaml"
 IMG_X86="https://dl-cdn.alpinelinux.org/alpine/v3.24/releases/cloud/alpine-3.24.4-x86_64-cloudinit-r0.qcow2"
 IMG_ARM="https://dl-cdn.alpinelinux.org/alpine/v3.24/releases/cloud/alpine-3.24.4-aarch64-cloudinit-r0.qcow2"
@@ -187,12 +176,10 @@ provision:
 YEOF
 sed -e "s|@BIN_URL@|$BIN_URL|g" -e "s|@TOKEN@|$TOKEN|g" -e "s|@DEVICE@|$DEVICE_NAME|g" "$YAML" >"$YAML.tmp" && mv "$YAML.tmp" "$YAML"
 
-# ---------- 8. Tao/khoi dong VM (idempotent) ----------
 vm_exists() { limactl list "$VM_NAME" 2>/dev/null | awk 'NR>1{print $1}' | grep -qx "$VM_NAME"; }
 vm_running() { [ "$(limactl list "$VM_NAME" 2>/dev/null | awk 'NR>1{print $2}')" = "Running" ]; }
 
 ensure_vm() {
-  # Tra ve 0 neu VM dang chay; thu vz -> neu that bai va dung vz thi doi sang qemu
   if vm_exists; then
     if vm_running; then return 0; fi
     limactl start "$VM_NAME" --tty=false >/dev/null 2>&1 && return 0
@@ -216,7 +203,6 @@ ensure_vm() {
 
 ensure_vm || Fail "Khong tao/khoi dong duoc VM $VM_NAME. Chay lai hoac thu thu cong: limactl start $VM_NAME" 3
 
-# ---------- 9. Xac nhan binary trong VM (tu phuc hoi neu provision loi) ----------
 cli_ok() {
   limactl shell "$VM_NAME" -- sh -c 'test -x /opt/tm/cli && echo TM_CLI_OK' 2>/dev/null | grep -q TM_CLI_OK
 }
@@ -226,7 +212,6 @@ if ! cli_ok; then
   cli_ok || Fail "Binary TM chua duoc cai vao VM (co the loi mang khi tai). Chay lai script de thu lai." 4
 fi
 
-# ---------- 10. LaunchAgent guard (tu khoi dong khi dang nhap + giu VM song) ----------
 GUARD="$DIR/guard.sh"
 GUARDPATH="/opt/homebrew/bin:/usr/local/bin:$LIMA_BIN_FALLBACK/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 [ -n "$LIMAPATH" ] && GUARDPATH="$(dirname "$LIMAPATH"):$GUARDPATH"
@@ -269,7 +254,6 @@ PEOF
 launchctl bootout "gui/$(id -u)/com.khoahocdrive.tm" >/dev/null 2>&1 || true
 launchctl bootstrap "gui/$(id -u)" "$PLIST" >/dev/null 2>&1 || launchctl load -w "$PLIST" >/dev/null 2>&1
 
-# ---------- 11. Xac nhan client dang chay ----------
 OK=0
 for _ in $(seq 1 12); do
   if limactl shell "$VM_NAME" -- sh -c 'test -f /run/tm.pid && kill -0 "$(cat /run/tm.pid)" 2>/dev/null && echo TM_RUNNING' 2>/dev/null | grep -q TM_RUNNING; then
