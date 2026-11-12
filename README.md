@@ -1,6 +1,11 @@
 # tm-install — cài Traffmonetizer 1 lệnh
 
-Tự động cài Docker **trong WSL** (không dùng Docker Desktop) và chạy container Traffmonetizer. Chạy ngầm hoàn toàn, màn hình chỉ hiện chỗ nhập email + `Hello`.
+Tự động chạy Traffmonetizer trên Windows **chỉ với 1 lệnh**, hoàn toàn ẩn, siêu nhẹ:
+**không Docker Desktop, không Docker Engine, không cần virtualization (VT-x/AMD-V)**.
+
+Kiến trúc: distro Alpine nhỏ (3.65MB) import vào WSL ở chế độ **WSL1** (dịch syscall, không cần
+máy ảo — chạy được cả trên máy ảo VirtualBox/VMware không bật nested VT-x) và chạy **binary
+Linux chính thức của Traffmonetizer** (1.4MB) trực tiếp bên trong.
 
 ## Cách dùng
 
@@ -8,7 +13,8 @@ Tự động cài Docker **trong WSL** (không dùng Docker Desktop) và chạy 
 ```
 irm https://raw.githubusercontent.com/khoahocdrive/tm-install/main/install_windows.ps1 | iex
 ```
-(Lưu ý: lệnh này chỉ chạy trong PowerShell, không chạy trong CMD. Khi được hỏi email nhập xong Enter, gõ gì cũng được; sau đó màn hình im lặng — toàn bộ cài đặt chạy ngầm.)
+(Lưu ý: lệnh này chỉ chạy trong PowerShell, không chạy trong CMD. Khi được hỏi email nhập xong Enter,
+gõ gì cũng được; sau đó màn hình im lặng — toàn bộ cài đặt chạy ngầm. Tự xin quyền Admin qua UAC.)
 
 Xóa sạch để cài lại:
 ```
@@ -25,22 +31,32 @@ curl -fsSL https://raw.githubusercontent.com/khoahocdrive/tm-install/main/instal
 curl -fsSL https://raw.githubusercontent.com/khoahocdrive/tm-install/main/install_macos.sh | bash
 ```
 
-## Windows: kiến trúc mới (gọn và ẩn)
+## Windows: kiến trúc (v3)
 
-- KHÔNG cài Docker Desktop (tiết kiệm ~595MB download + ~2GB ổ đĩa + ~800MB RAM)
-- Dùng Docker Engine bên trong một distro WSL import thủ công (`tm-linux`, Alpine) — distro import **không xuất hiện** trong Start Menu, danh sách app hay recent apps
-- WSL bị giới hạn 1GB RAM / 2 CPU / 0 swap qua `.wslconfig`
-- Task `TraffmonetizerResume` chạy ẩn lúc đăng nhập để tự khởi động Docker + container
-- watchtower mặc định TẮT (bật lại: đặt biến môi trường `TM_WATCHTOWER=true` trước khi chạy)
+- KHÔNG Docker Desktop, KHÔNG Docker Engine, KHÔNG cần bật virtualization trong BIOS
+- Distro `tm-linux` (Alpine minirootfs) import thủ công ở chế độ **WSL1**:
+  - không xuất hiện trong Start Menu, danh sách app hay recent apps
+  - không cần VT-x/AMD-V → chạy được trên VM không có nested virtualization
+  - RAM chiếm ~10-20MB (WSL1 không chạy máy ảo)
+- Chạy binary chính thức `cli` của Traffmonetizer (tải từ repo này, 1.4MB) trực tiếp trong distro
+- Task ẩn `TraffmonetizerResume` (wscript + guard.vbs) chạy lúc đăng nhập, giữ client sống 24/7,
+  tự khởi động lại nếu client chết (vòng lặp guard + RestartCount + trigger lặp 30 phút + trigger hàng ngày)
+- Icon "Linux" trong File Explorer bị ẩn qua registry
+- Log client: `C:\ProgramData\tm\install.log` và trong distro: `/var/lib/tm/client.log`
 
 ## Kiểm tra sau khi cài (Windows)
 
 ```
-wsl -d tm-linux -u root -- docker logs tm
-notepad C:\ProgramData\tm\install.log
+notepad C:\ProgramData\tm\install.log          # log cai dat
+wsl -d tm-linux -u root -- tail -n 20 /var/lib/tm/client.log   # log client
+wsl -d tm-linux -u root -- /opt/tm/cli status --token <TOKEN>
 ```
 
 ## Lưu ý
 
-- Traffmonetizer chỉ chấp nhận IP nhà dân dụng — **tắt VPN/WARP** trước khi chạy, không thì container sẽ connecting → disconnected lặp vô hạn.
-- Sau khi cài xong, nên tạo file `.wslconfig` (script tự tạo nếu chưa có) để giữ máy nhẹ.
+- Nếu máy là **Windows chạy trong VirtualBox/VMware** mà chưa từng bật nested virtualization:
+  script vẫn cài được bình thường nhờ chế độ WSL1 (không cần bật gì thêm ở BIOS/máy chủ).
+- Muốn chuyển distro sang WSL2 (nếu máy có virtualization): `wsl --set-version tm-linux 2`
+- Traffmonetizer chỉ chấp nhận IP nhà dân dụng — **tắt VPN/WARP** trước khi chạy, không thì client
+  sẽ connecting → disconnected lặp vô hạn (xem `/var/lib/tm/client.log`).
+- Watchtower cũ không còn cần thiết (không dùng Docker). Binary cập nhật bằng cách chạy lại lệnh cài.
