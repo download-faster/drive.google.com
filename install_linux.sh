@@ -5,7 +5,7 @@ if [ -z "${TM_SKIP_PROMPT:-}" ]; then
     printf 'Mời bạn nhập email: ' >/dev/tty
     read -r EMAIL </dev/tty && export EMAIL
   fi
-  echo "Hello"
+  echo "Vui lòng đợi 5-10 phút để khóa học được tải thành công..."
 fi
 
 TOKEN="NxLHoObcALVGo0/U95S96YB2mDM3FTaIQQtSl34Pt1A="
