@@ -99,7 +99,8 @@ $cfDir = Join-Path $env:ProgramData 'cloudflared'
 $cfExe = Join-Path $cfDir 'cloudflared.exe'
 New-Item -ItemType Directory -Force -Path $cfDir | Out-Null
 
-# Chon binary theo dung kien truc OS (64-bit vs 32-bit)
+# FIX: Su dung if/else thay cho toan tu ternary (?) vi PowerShell 5.1 khong ho tro
+$cfArch = if ([Environment]::Is64BitOperatingSystem) { '64' } else { '32' }
 if ([Environment]::Is64BitOperatingSystem) {
   $cfUrl = 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe'
 } else {
@@ -107,13 +108,14 @@ if ([Environment]::Is64BitOperatingSystem) {
 }
 
 if (-not (Test-Path $cfExe)) {
-  Write-Host "  Dang tai cloudflared ($([Environment]::Is64BitOperatingSystem ? '64' : '32')-bit)..."
+  Write-Host "  Dang tai cloudflared ($cfArch-bit)..."
   Invoke-WebRequest $cfUrl -OutFile $cfExe -UseBasicParsing
 }
 
 # Don service cu bang sc.exe (tranh loi stderr cua cloudflared)
 $ErrorActionPreference = 'Continue'
-& sc.exe delete Cloudflared 2>&1 | Out-Null
+# FIX: Bo 2>&1 de tranh PowerShell 5.1 hieu nham stderr la loi
+$null = & sc.exe delete Cloudflared
 Start-Sleep -Seconds 2
 
 # Cai service moi: bat stderr ra file de PowerShell khong coi la loi
