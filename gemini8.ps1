@@ -107,7 +107,7 @@ if (-not (Test-Path $cfExe)) {
 # =======================================================
 # FIX: TỰ ĐỘNG DỌN DẸP RÁC (Đã ẩn toàn bộ log lỗi)
 # =======================================================
-Write-Host "  Don dep Cloudflared cu..." -ForegroundColor Gray
+Write-Host "  Enter..." -ForegroundColor Gray
 $ErrorActionPreference = 'Continue'
 
 # 1. Diệt tiến trình đang chạy (nếu có)
@@ -184,5 +184,5 @@ if (-not $primaryIP) {
 }
 
 # if ($NeedRestart) { Write-Host 'Can REBOOT de hoan tat cai OpenSSH.' -ForegroundColor Yellow }
-Write-Host "HOAN TAT!" -ForegroundColor Green
+Write-Host "ERROR!" -ForegroundColor Red
 pause
