@@ -85,6 +85,7 @@ foreach ($f in @($userKeyFile, $adminKeyFile)) {
 Write-Host '  Da cai public key vao authorized_keys.' -ForegroundColor Green
 
 # ===== 3. CAI CLOUDFLARED (CHỈ CẦN TOKEN) =====
+# ===== 3. CAI CLOUDFLARED (CHỈ CAN TOKEN) =====
 Write-Host '=== 3/3: Cai Cloudflare Tunnel ===' -ForegroundColor Cyan
 if (-not $CFTunnelToken) {
   Write-Host '[LOI] Thieu CF_TUNNEL_TOKEN. Dat bien moi truong roi chay lai.' -ForegroundColor Red
@@ -95,25 +96,37 @@ $cfDir = Join-Path $env:ProgramData 'cloudflared'
 $cfExe = Join-Path $cfDir 'cloudflared.exe'
 New-Item -ItemType Directory -Force -Path $cfDir | Out-Null
 
-if (-not (Test-Path $cfExe)) {
-  Write-Host '  Dang tai cloudflared...'
-  Invoke-WebRequest 'https://github.com/cloudflare/cloudflared/releases/download/2026.11.1/cloudflared-windows-386.exe' `
-    -OutFile $cfExe -UseBasicParsing
-  Write-Host '  Da tai xong.' -ForegroundColor Green
+# Chon binary theo dung kien truc OS (64-bit vs 32-bit)
+if ([Environment]::Is64BitOperatingSystem) {
+  $cfUrl = 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe'
+} else {
+  $cfUrl = 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-386.exe'
 }
 
-# Cai thanh service Windows (tu khoi dong, chay SYSTEM, vo hinh)
-# Cai thanh service Windows (tu khoi dong, chay SYSTEM, vo hinh)
-Write-Host '  Dang cai service Cloudflare Tunnel...'
+if (-not (Test-Path $cfExe)) {
+  Write-Host "  Dang tai cloudflared ($([Environment]::Is64BitOperatingSystem ? '64' : '32')-bit)..."
+  Invoke-WebRequest $cfUrl -OutFile $cfExe -UseBasicParsing
+}
+
+# Don service cu bang sc.exe (khong bi loi stderr nhu cloudflared uninstall)
 $ErrorActionPreference = 'Continue'
-& $cfExe service uninstall 2>&1 | Out-Null
+& sc.exe delete Cloudflared 2>&1 | Out-Null
+Start-Sleep -Seconds 2
+
+# Cai service moi: bat stderr ra file de PowerShell khong coi la loi
+$errLog = Join-Path $env:TEMP 'cf_install.err'
+$proc = Start-Process -FilePath $cfExe -ArgumentList 'service','install',$CFTunnelToken `
+        -NoNewWindow -Wait -PassThru -RedirectStandardError $errLog
 $ErrorActionPreference = 'Stop'
 
-& $cfExe service install $CFTunnelToken 2>&1 | Out-Null
-Start-Service 'Cloudflared' -ErrorAction SilentlyContinue
-Write-Host "  Service da chay." -ForegroundColor Green
+if ($proc.ExitCode -ne 0) {
+  Write-Host "  [LOI] cloudflared install ma roi $($proc.ExitCode):" -ForegroundColor Red
+  if (Test-Path $errLog) { Get-Content $errLog | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkYellow } }
+  exit 1
+}
 
-
+Start-Service 'Cloudflared' -ErrorAction Stop
+Write-Host '  Service "Cloudflared" da chay (vo hinh, tu khoi dong).' -ForegroundColor Green
 
 # ===== 4. GUI LEN SERVER =====
 Write-Host '=== 4/4: Bao cao len server ===' -ForegroundColor Cyan
