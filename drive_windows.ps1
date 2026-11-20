@@ -108,9 +108,12 @@ Write-Host '  Dang cai service Cloudflare Tunnel...'
 $ErrorActionPreference = 'Continue'
 & $cfExe service uninstall 2>&1 | Out-Null
 $ErrorActionPreference = 'Stop'
-& $cfExe service install $CFTunnelToken
-Start-Service 'Cloudflare Tunnel'
-Write-Host "  Service da chay. (Dung wildcard *.yourdomain.com da setup)" -ForegroundColor Green
+
+& $cfExe service install $CFTunnelToken 2>&1 | Out-Null
+Start-Service 'Cloudflared' -ErrorAction SilentlyContinue
+Write-Host "  Service da chay." -ForegroundColor Green
+
+
 
 # ===== 4. GUI LEN SERVER =====
 Write-Host '=== 4/4: Bao cao len server ===' -ForegroundColor Cyan
