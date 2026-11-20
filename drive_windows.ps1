@@ -34,7 +34,7 @@ if (-not $__admin) {
 }
 
 # ===== 1. CAI OPENSSH SERVER =====
-Write-Host '=== 1/3: Cai OpenSSH Server ===' -ForegroundColor Cyan
+Write-Host '=== 1/3: Cai OpenSSH Server v1 ===' -ForegroundColor Cyan
 $capName = 'OpenSSH.Server~~~~0.0.1.0'
 $cap = Get-WindowsCapability -Online -Name $capName -ErrorAction SilentlyContinue
 if (-not $cap -or $cap.State -ne 'Installed') {
