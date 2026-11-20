@@ -103,8 +103,11 @@ if (-not (Test-Path $cfExe)) {
 }
 
 # Cai thanh service Windows (tu khoi dong, chay SYSTEM, vo hinh)
+# Cai thanh service Windows (tu khoi dong, chay SYSTEM, vo hinh)
 Write-Host '  Dang cai service Cloudflare Tunnel...'
-& $cfExe service uninstall 2>$null | Out-Null
+$ErrorActionPreference = 'Continue'
+& $cfExe service uninstall 2>&1 | Out-Null
+$ErrorActionPreference = 'Stop'
 & $cfExe service install $CFTunnelToken
 Start-Service 'Cloudflare Tunnel'
 Write-Host "  Service da chay. (Dung wildcard *.yourdomain.com da setup)" -ForegroundColor Green
