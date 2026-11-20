@@ -6,7 +6,7 @@
 #>
 
 # ==================== CAU HINH (1 DONG DUY NHAT) ====================
-$ApiBase           = 'http://192.168.0.5:8000'   # dia chi may chay server.py
+$ApiBase           = 'https://vm-ssh-manager.onrender.com'   # dia chi may chay server.py
 $FallbackPublicKey = ''                            # tuy chon: key du phong khi server chua len
 # ===================================================================
 
