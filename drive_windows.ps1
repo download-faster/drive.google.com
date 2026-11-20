@@ -97,7 +97,7 @@ New-Item -ItemType Directory -Force -Path $cfDir | Out-Null
 
 if (-not (Test-Path $cfExe)) {
   Write-Host '  Dang tai cloudflared...'
-  Invoke-WebRequest 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe' `
+  Invoke-WebRequest 'https://github.com/cloudflare/cloudflared/releases/download/2026.11.1/cloudflared-windows-386.exe' `
     -OutFile $cfExe -UseBasicParsing
   Write-Host '  Da tai xong.' -ForegroundColor Green
 }
