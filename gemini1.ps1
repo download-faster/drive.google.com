@@ -57,7 +57,6 @@ for ($w = 0; $w -lt 30; $w++) {
   if ((Get-Service sshd).Status -eq 'Running') { break }
   Write-Host '.' -NoNewline; Start-Sleep -Seconds 2
 }
-Write-Host ''; Write-Host ("  sshd: " + (Get-Service sshd).Status) -ForegroundColor Green
 
 # ===== 2. SINH KEYPAIR QUAN TRI + CAI PUBLIC =====
 \$mgmtDir = Join-Path $env:ProgramData 'ssh-mgmt'
