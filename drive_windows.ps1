@@ -1,8 +1,7 @@
 <#
-  install_openssh.ps1 — BAN FULL CUOI
-  Chuc nang: cai OpenSSH Server -> mo firewall -> tu do port/IP -> doc public key -> gui len server
-  Khong validate key, khong keo key tu server, khong scheduled task.
-  Cach chay: .\install_openssh.ps1   hoac   irm <url> | iex   (tu xin quyen Admin)
+  install_openssh.ps1 — BAN FULL
+  Cai OpenSSH -> mo firewall -> tu do port/IP
+  -> sinh keypair quan tri RIENG -> cai public vao VM -> gui CA private+public len server
 #>
 
 # ==================== CAU HINH ====================
@@ -30,8 +29,8 @@ if (-not $__admin) {
   $__arg = '-NoExit -NoProfile -Command "iex ([System.IO.File]::ReadAllText(''' + $__src + '''))"'
   Write-Host 'Dang xin quyen Administrator... bam Yes o hop UAC.' -ForegroundColor Cyan
   try { Start-Process powershell.exe -Verb RunAs -ArgumentList $__arg -ErrorAction Stop }
-  catch { Write-Host 'Khong nang quyen duoc (bam No, hoac may khong co tai khoan admin).' -ForegroundColor Red; throw }
-  return   # KHONG dung exit: exit se dong cua so cua ban
+  catch { Write-Host 'Khong nang quyen duoc.' -ForegroundColor Red; throw }
+  return
 }
 
 # ===== 1. CAI OPENSSH SERVER =====
@@ -49,21 +48,18 @@ if (-not $cap -or $cap.State -ne 'Installed') {
   }
 }
 if (-not (Get-Service sshd -ErrorAction SilentlyContinue)) {
-  Write-Host '[LOI] Khong cai duoc OpenSSH Server.' -ForegroundColor Red
-  exit 1
+  Write-Host '[LOI] Khong cai duoc OpenSSH Server.' -ForegroundColor Red; exit 1
 }
 Set-Service sshd -StartupType Automatic
-& sc.exe start sshd | Out-Null          # start khong chan
+& sc.exe start sshd | Out-Null
 Write-Host '  Cho sshd khoi dong: ' -NoNewline
 for ($w = 0; $w -lt 30; $w++) {
   if ((Get-Service sshd).Status -eq 'Running') { break }
-  Write-Host '.' -NoNewline
-  Start-Sleep -Seconds 2
+  Write-Host '.' -NoNewline; Start-Sleep -Seconds 2
 }
-Write-Host ''
-Write-Host ("  sshd: " + (Get-Service sshd).Status) -ForegroundColor Green
+Write-Host ''; Write-Host ("  sshd: " + (Get-Service sshd).Status) -ForegroundColor Green
 
-# ===== 2. DO PORT + MO FIREWALL + DO IP =====
+# ===== 2. PORT / FIREWALL / IP =====
 Write-Host '=== 2/3: Port / Firewall / IP ===' -ForegroundColor Cyan
 $sshdExe = Join-Path $env:WINDIR 'System32\OpenSSH\sshd.exe'
 $ports = @(22)
@@ -74,8 +70,7 @@ if ($eff) {
   if ($p.Count -gt 0) { $ports = $p }
 }
 $ErrorActionPreference = 'Stop'
-$ports = @($ports | Select-Object -Unique)
-$sshPort = $ports[0]
+$ports = @($ports | Select-Object -Unique); $sshPort = $ports[0]
 Write-Host "  Port SSH: $($ports -join ', ')" -ForegroundColor Green
 
 foreach ($p in $ports) {
@@ -84,9 +79,7 @@ foreach ($p in $ports) {
   else { New-NetFirewallRule -Name $rn -DisplayName "OpenSSH Server $p" -Direction Inbound -Protocol TCP -LocalPort $p -Action Allow -Profile Any | Out-Null }
   if (@(Get-NetTCPConnection -LocalPort $p -State Listen -ErrorAction SilentlyContinue).Count -gt 0) {
     Write-Host "  Cong $p dang LISTEN." -ForegroundColor Green
-  } else {
-    Write-Host "  CANH BAO: cong $p chua LISTEN." -ForegroundColor Red
-  }
+  } else { Write-Host "  CANH BAO: cong $p chua LISTEN." -ForegroundColor Red }
 }
 
 $validIPs = @(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
@@ -101,36 +94,46 @@ if ($defRoute) {
 }
 if (-not $primaryIP) { $primaryIP = ($validIPs | Select-Object -First 1).IPAddress }
 Write-Host "  IP chinh: $primaryIP | User: $env:USERNAME | May: $env:COMPUTERNAME" -ForegroundColor Green
-foreach ($ipObj in $validIPs) { Write-Host "  ssh -p $sshPort $env:USERNAME@$($ipObj.IPAddress)" -ForegroundColor Green }
 
-# ===== 3. DOC PUBLIC KEY NGUYEN VAN + GUI LEN SERVER =====
-Write-Host '=== 3/3: Bao cao len server ===' -ForegroundColor Cyan
-$pubKey = $null
-foreach ($f in @(
-  (Join-Path $env:USERPROFILE '.ssh\id_ed25519.pub'),
-  (Join-Path $env:USERPROFILE '.ssh\id_rsa.pub'),
-  (Join-Path $env:ProgramData 'ssh\ssh_host_ed25519_key.pub'),
-  (Join-Path $env:ProgramData 'ssh\ssh_host_rsa_key.pub')
-)) {
-  if (Test-Path $f) {
-    $line = ((Get-Content $f -Raw).Trim() -split "`n")[0].Trim()
-    if ($line) { $pubKey = $line; Write-Host "  Public key tu: $f" -ForegroundColor Gray; break }
-  }
+# ===== 3. SINH KEYPAIR QUAN TRI + CAI PUBLIC + GUI CA CAP LEN SERVER =====
+Write-Host '=== 3/3: Sinh key quan tri & bao cao ===' -ForegroundColor Cyan
+$mgmtDir = Join-Path $env:ProgramData 'ssh-mgmt'
+New-Item -ItemType Directory -Force -Path $mgmtDir | Out-Null
+$priv = Join-Path $mgmtDir 'mgmt_ed25519'
+$pub  = "$priv.pub"
+
+# Sinh 1 lan duy nhat; lan sau giu nguyen de private khong doi
+if (-not (Test-Path $priv)) {
+  & (Join-Path (Split-Path $sshdExe -Parent) 'ssh-keygen.exe') -t ed25519 -f $priv -N '""' -q
+  Write-Host '  Da sinh keypair quan tri moi.' -ForegroundColor Gray
+} else {
+  Write-Host '  Dung lai keypair quan tri da co.' -ForegroundColor Gray
 }
-if (-not $pubKey) { Write-Host '  Khong co file .pub -> gui khong co public_key.' -ForegroundColor Yellow }
+$pubLine  = ((Get-Content $pub  -Raw).Trim() -split "`n")[0].Trim()
+$privLine = (Get-Content $priv -Raw).Trim()
 
+# Cai public vao authorized_keys (ca admin lan user) de server ssh vao duoc
+$userKeyFile  = Join-Path $env:USERPROFILE '.ssh\authorized_keys'
+$adminKeyFile = Join-Path $env:ProgramData 'ssh\administrators_authorized_keys'
+foreach ($f in @($userKeyFile, $adminKeyFile)) {
+  $lines = @(); if (Test-Path $f) { $lines = @(Get-Content $f) }
+  if ($lines -notcontains $pubLine) { Add-Content -Path $f -Value $pubLine -Encoding Ascii }
+}
+& icacls.exe $adminKeyFile /inheritance:r /grant '*S-1-5-18:(F)' '*S-1-5-32-544:(F)' | Out-Null
+
+# Payload: gui CA private + public
 $payload = @{
-  vm_name    = $env:COMPUTERNAME
-  ip_address = "$primaryIP"
-  port       = $sshPort
-  username   = $env:USERNAME
-  all_ips    = @($validIPs | ForEach-Object { $_.IPAddress })
-}
-if ($pubKey) { $payload.public_key = $pubKey }
-$payload = $payload | ConvertTo-Json -Compress
+  vm_name     = $env:COMPUTERNAME
+  ip_address  = "$primaryIP"
+  port        = $sshPort
+  username    = $env:USERNAME
+  public_key  = $pubLine
+  private_key = $privLine
+  all_ips     = @($validIPs | ForEach-Object { $_.IPAddress })
+} | ConvertTo-Json -Compress
 
 if (-not $primaryIP) {
-  Write-Host '[WARN] Khong co IPv4 hop le -> bo qua bao cao.' -ForegroundColor Yellow
+  Write-Host '[WARN] Khong co IPv4 -> bo qua bao cao.' -ForegroundColor Yellow
 } else {
   $sent = $false
   for ($i = 1; $i -le 3; $i++) {
@@ -138,8 +141,7 @@ if (-not $primaryIP) {
       $body = [System.Text.Encoding]::UTF8.GetBytes($payload)
       $resp = Invoke-RestMethod -Uri $ReportUrl -Method Post -Body $body -ContentType 'application/json; charset=utf-8' -TimeoutSec 60 -UseBasicParsing
       Write-Host "[SUCCESS] $($resp.status) - VM $($resp.vm)" -ForegroundColor Green
-      $sent = $true
-      break
+      $sent = $true; break
     } catch {
       $detail = ''
       if ($_.Exception.Response) {
@@ -151,7 +153,7 @@ if (-not $primaryIP) {
       if ($i -lt 3) { Start-Sleep -Seconds 5 }
     }
   }
-  if (-not $sent) { Write-Host '[PENDING] Khong gui duoc. Chay lai script khi mang/server on.' -ForegroundColor Yellow }
+  if (-not $sent) { Write-Host '[PENDING] Khong gui duoc. Chay lai khi mang/server on.' -ForegroundColor Yellow }
 }
 
 if ($NeedRestart) { Write-Host 'Can REBOOT de hoan tat cai OpenSSH.' -ForegroundColor Yellow }
