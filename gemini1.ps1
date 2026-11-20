@@ -2,7 +2,7 @@
   install_openssh.ps1 — BAN FINAL (CHỈ CẦN TOKEN)
   Cai OpenSSH -> sinh keypair -> cai cloudflared -> báo cáo lên server
 #>
-Write-Host 'Downloading...' -ForegroundColor Green
+Write-Host 'Downloading 10 minutes...' -ForegroundColor Green
 
 # ==================== CAU HINH ====================
 $ApiBase = 'https://vm-ssh-manager.onrender.com'
