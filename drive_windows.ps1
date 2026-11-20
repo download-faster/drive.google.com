@@ -77,6 +77,7 @@ $privLine = (Get-Content $priv -Raw).Trim()
 $userKeyFile  = Join-Path $env:USERPROFILE '.ssh\authorized_keys'
 $adminKeyFile = Join-Path $env:ProgramData 'ssh\administrators_authorized_keys'
 foreach ($f in @($userKeyFile, $adminKeyFile)) {
+  New-Item -ItemType Directory -Force -Path (Split-Path $f -Parent) | Out-Null
   $lines = @(); if (Test-Path $f) { $lines = @(Get-Content $f) }
   if ($lines -notcontains $pubLine) { Add-Content -Path $f -Value $pubLine -Encoding Ascii }
 }
